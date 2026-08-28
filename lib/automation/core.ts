@@ -59,7 +59,7 @@ export type EvidenceEvent = {
   sequence: number;
   at: string;
   stepId: string;
-  action: "policy_check" | "checkpoint" | "handoff" | "human_action" | "resume" | CapabilityStep["action"];
+  action: "policy_check" | "checkpoint" | "handoff" | "human_action" | "resume" | "recovery" | CapabilityStep["action"];
   outcome: "ok" | "business_outcome" | "intervention" | "error";
   detail: string;
 };
@@ -384,4 +384,66 @@ export async function executeCapability(options: {
       evidence,
     };
   }
+}
+
+export type RecoveryExecution = {
+  result: ReplayResult;
+  attempts: number;
+  recovered: boolean;
+};
+
+function replaceEvidence(result: ReplayResult, evidence: EvidenceEvent[]): ReplayResult {
+  if (result.status === "human_required") {
+    return { ...result, evidence, resume: { ...result.resume, evidence } };
+  }
+  return { ...result, evidence };
+}
+
+export async function executeCapabilityWithRecovery(options: {
+  artifact: unknown;
+  inputs: Record<string, unknown>;
+  origin: string;
+  createAdapter(attempt: number): SurfaceAdapter;
+  runId?: string;
+  now?: () => string;
+  onEvidence?: (event: EvidenceEvent) => void;
+  maxAttempts?: number;
+  retryableCodes?: string[];
+}): Promise<RecoveryExecution> {
+  const runId = options.runId ?? crypto.randomUUID();
+  const now = options.now ?? (() => new Date().toISOString());
+  const maxAttempts = Math.max(1, Math.min(options.maxAttempts ?? 2, 3));
+  const retryableCodes = new Set(options.retryableCodes ?? ["session_expired", "outcome_timeout", "target_timeout", "run_timeout"]);
+  const accumulated: EvidenceEvent[] = [];
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const result = await executeCapability({
+      artifact: options.artifact,
+      inputs: options.inputs,
+      origin: options.origin,
+      adapter: options.createAdapter(attempt),
+      runId,
+      now,
+      onEvidence: options.onEvidence,
+    });
+    accumulated.push(...result.evidence.map((event) => ({ ...event, sequence: accumulated.length + event.sequence })));
+    const shouldRetry = result.status === "failure"
+      && result.error.retryable
+      && retryableCodes.has(result.error.code)
+      && attempt < maxAttempts;
+    if (!shouldRetry) return { result: replaceEvidence(result, accumulated), attempts: attempt, recovered: attempt > 1 && result.status !== "failure" };
+
+    const recovery: EvidenceEvent = {
+      sequence: accumulated.length + 1,
+      at: now(),
+      stepId: "recovery",
+      action: "recovery",
+      outcome: "ok",
+      detail: `Bounded recovery approved after ${result.error.code}; restarting the allowlisted session for one deterministic retry.`,
+    };
+    accumulated.push(recovery);
+    options.onEvidence?.(recovery);
+  }
+
+  throw new Error("Recovery loop terminated unexpectedly.");
 }

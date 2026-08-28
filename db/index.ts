@@ -42,6 +42,9 @@ export async function ensureRunStore(database: D1Database) {
       provider TEXT,
       summary_json TEXT NOT NULL,
       evidence_json TEXT NOT NULL,
+      evidence_ciphertext TEXT,
+      evidence_iv TEXT,
+      evidence_key_version TEXT,
       artifact_json TEXT,
       evidence_hash TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL,
@@ -69,5 +72,8 @@ export async function ensureRunStore(database: D1Database) {
   const additions: D1Statement[] = [];
   if (!names.has("evidence_hash")) additions.push(database.prepare("ALTER TABLE automation_runs ADD evidence_hash TEXT NOT NULL DEFAULT ''"));
   if (!names.has("expires_at")) additions.push(database.prepare("ALTER TABLE automation_runs ADD expires_at TEXT NOT NULL DEFAULT ''"));
+  if (!names.has("evidence_ciphertext")) additions.push(database.prepare("ALTER TABLE automation_runs ADD evidence_ciphertext TEXT"));
+  if (!names.has("evidence_iv")) additions.push(database.prepare("ALTER TABLE automation_runs ADD evidence_iv TEXT"));
+  if (!names.has("evidence_key_version")) additions.push(database.prepare("ALTER TABLE automation_runs ADD evidence_key_version TEXT"));
   if (additions.length > 0) await database.batch(additions);
 }

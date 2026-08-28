@@ -15,6 +15,13 @@
       "when": 1787888100299,
       "tag": "0001_lame_stellaris",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1787920744253,
+      "tag": "0002_gigantic_supreme_intelligence",
+      "breakpoints": true
     }
   ]
 }

@@ -1,6 +1,6 @@
 # Legacy Credit Union Computer-Use Automation
 
-Phase 4 hardens the end-to-end vertical slice with exact-artifact approval, tamper-evident evidence, configurable retention, owner-scoped deletion, and explicit replay fault injection.
+Phase 5 adds application-layer evidence encryption and a bounded deterministic recovery policy to the complete discovery, approval, replay, and human-handoff slice.
 
 ## What works
 
@@ -18,7 +18,9 @@ Phase 4 hardens the end-to-end vertical slice with exact-artifact approval, tamp
 - Human action capture without field values and deterministic same-session resume
 - Per-user D1 run history with SHA-256 evidence integrity, 7/30/90-day expiry, deletion, and restorable capability artifacts
 - Injected session-expiry, slow-load timeout, and application-error paths
-- Unit coverage for replay, discovery, model validation, storage policy, artifact fingerprints, fault classification, and handoff transitions
+- One clean retry for allowlisted recoverable failures; hard failures are never retried
+- AES-256-GCM evidence encryption in hosted storage with owner/run/hash authenticated context
+- Unit coverage for replay, recovery, encryption, discovery, model validation, storage policy, artifact fingerprints, fault classification, and handoff transitions
 
 ## Run locally
 
@@ -32,11 +34,13 @@ pnpm run dev
 
 `OPENAI_API_KEY` is optional. Without it, discovery uses the labeled safe simulator and the complete discovery-to-replay flow still works locally. Never commit `.env.local`.
 
+`EVIDENCE_ENCRYPTION_KEY` is optional only on localhost and must be a base64-encoded 32-byte key. Hosted production requires it; `EVIDENCE_KEY_VERSION` identifies the active key version.
+
 Open `http://localhost:3000`.
 
 - Discover with member `12345`, approve the exact generated artifact, then replay it.
 - Use member `00000` to verify the `member_not_found` outcome.
-- Select each fault injection option to verify recoverable session/timeout errors and a hard application failure.
+- Select session expiry or slow load to verify one bounded recovery and successful checkpoint completion. Application errors stop without retry.
 - Choose a retention window or delete a stored run from the audit trail.
 - Open **Human handoff**, start the assisted replay, accept control, click **Continue lookup** inside the live target, then resume automation.
 - Open `/legacy` to operate the target manually.
@@ -68,4 +72,4 @@ pnpm run build
 
 ## Next phase
 
-Phase 5: separate reviewer/operator roles, managed key-backed evidence encryption, multi-operator approval workflows, and a deployment-grade fault and recovery matrix. Deterministic replay remains the production execution path.
+Phase 6: an agent-facing capability catalog plus canonical tenant/vendor overrides and multi-run stability scoring. True reviewer/operator separation requires multiple authenticated users and remains a deployment concern rather than a simulated identity toggle.

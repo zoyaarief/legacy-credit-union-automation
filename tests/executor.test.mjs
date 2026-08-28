@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { AutomationError, executeCapability, HumanInterventionError } from "../lib/automation/core.ts";
+import { AutomationError, executeCapability, executeCapabilityWithRecovery, HumanInterventionError } from "../lib/automation/core.ts";
 
 const artifactUrl = new URL("../capabilities/get-savings-balance.v1.json", import.meta.url);
 const artifact = JSON.parse(await readFile(artifactUrl, "utf8"));
@@ -144,3 +144,42 @@ for (const fault of [
     assert.equal(result.error.retryable, fault.retryable);
   });
 }
+
+test("bounded recovery restarts one retryable replay and preserves evidence", async () => {
+  const execution = await executeCapabilityWithRecovery({
+    artifact,
+    inputs: { memberId: "12345" },
+    origin: fixed.origin,
+    runId: fixed.runId,
+    now: fixed.now,
+    createAdapter: (attempt) => adapter({
+      waitForOutcome: async (outcomes) => {
+        if (attempt === 1) throw new AutomationError("session_expired", "recoverable", "Session expired.", true);
+        return outcomes.find((outcome) => outcome.kind === "success");
+      },
+    }),
+  });
+  assert.equal(execution.result.status, "success");
+  assert.equal(execution.attempts, 2);
+  assert.equal(execution.recovered, true);
+  assert.ok(execution.result.evidence.some((event) => event.action === "recovery"));
+  assert.deepEqual(execution.result.evidence.map((event) => event.sequence), execution.result.evidence.map((_, index) => index + 1));
+});
+
+test("bounded recovery never retries a hard failure", async () => {
+  let adapters = 0;
+  const execution = await executeCapabilityWithRecovery({
+    artifact,
+    inputs: { memberId: "12345" },
+    origin: fixed.origin,
+    runId: fixed.runId,
+    now: fixed.now,
+    createAdapter: () => {
+      adapters += 1;
+      return adapter({ waitForOutcome: async () => { throw new AutomationError("application_unavailable", "hard_failure", "Unavailable."); } });
+    },
+  });
+  assert.equal(execution.result.status, "failure");
+  assert.equal(execution.attempts, 1);
+  assert.equal(adapters, 1);
+});

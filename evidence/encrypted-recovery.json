@@ -1,0 +1,27 @@
+{
+  "schemaVersion": "1.0",
+  "phase": 5,
+  "scenario": "session expiry followed by one clean deterministic retry",
+  "initialOutcome": {
+    "status": "failure",
+    "code": "session_expired",
+    "category": "recoverable",
+    "retryable": true
+  },
+  "policy": {
+    "maximumAttempts": 2,
+    "openEndedRecovery": false,
+    "retryAction": "restart_allowlisted_session"
+  },
+  "finalOutcome": {
+    "status": "success",
+    "attempts": 2,
+    "checkpoint": "verified"
+  },
+  "storage": {
+    "cipher": "AES-256-GCM",
+    "authenticatedContext": ["owner_id", "run_id", "evidence_hash"],
+    "plaintextEvidencePersisted": false,
+    "integrity": "SHA-256"
+  }
+}

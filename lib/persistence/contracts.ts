@@ -22,6 +22,8 @@ export type RunRecord = RunRecordInput & {
   expiresAt: string;
   evidenceHash: string;
   integrity: "verified" | "mismatch" | "legacy";
+  encryption: "aes-gcm" | "legacy-plaintext";
+  keyVersion: string | null;
 };
 
 export type ArtifactReview = {
