@@ -64,3 +64,16 @@ export const operationalEvents = sqliteTable(
   },
   (table) => [index("idx_operational_events_owner_created").on(table.ownerId, table.createdAt)],
 );
+
+export const automationJobs = sqliteTable(
+  "automation_jobs",
+  {
+    id: text("id").primaryKey(), ownerId: text("owner_id").notNull(), status: text("status").notNull(),
+    capabilityName: text("capability_name").notNull(), capabilityVersion: text("capability_version").notNull(),
+    variantId: text("variant_id").notNull(), artifactHash: text("artifact_hash").notNull(),
+    inputCiphertext: text("input_ciphertext").notNull(), inputIv: text("input_iv").notNull(), inputKeyVersion: text("input_key_version").notNull(),
+    resultJson: text("result_json"), createdAt: text("created_at").notNull(), updatedAt: text("updated_at").notNull(),
+    claimedAt: text("claimed_at"), leaseExpiresAt: text("lease_expires_at"), completedAt: text("completed_at"),
+  },
+  (table) => [index("idx_automation_jobs_owner_status_created").on(table.ownerId, table.status, table.createdAt)],
+);

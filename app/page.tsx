@@ -33,6 +33,7 @@ import { INITIAL_HANDOFF_STATE, transitionHandoff, type HandoffState } from "@/l
 import type { CapabilityCatalogEntry, InvocationTicket, VerifiedInvocation } from "@/lib/automation/catalog";
 import { scoreStability, type StabilityRun, type StabilityScore } from "@/lib/automation/stability";
 import type { OperationalSnapshot } from "@/lib/operations/core";
+import type { AutomationJob } from "@/lib/jobs/core";
 import type { ArtifactReview, RunRecord, RunRecordInput } from "@/lib/persistence/contracts";
 
 const savedCapability = validateCapability(rawCapability);
@@ -236,6 +237,8 @@ export default function Home() {
   const runCounterRef = useRef(0);
   const resumeRef = useRef<ReplayResume | null>(null);
   const stopHumanCaptureRef = useRef<(() => void) | null>(null);
+  const handoffJobRef = useRef<string | null>(null);
+  const handoffInvocationRef = useRef<VerifiedInvocation | null>(null);
   const [mode, setMode] = useState<Mode>("discover");
   const [goal, setGoal] = useState("Look up member {{memberId}} and return the current savings balance and account status.");
   const [memberId, setMemberId] = useState("12345");
@@ -263,6 +266,8 @@ export default function Home() {
   const [stability, setStability] = useState<StabilityScore | null>(null);
   const [operations, setOperations] = useState<OperationalSnapshot | null>(null);
   const [rotationState, setRotationState] = useState<"idle" | "running" | "complete" | "unavailable">("idle");
+  const [jobs, setJobs] = useState<AutomationJob[]>([]);
+  const [jobState, setJobState] = useState<"idle" | "running">("idle");
   const activeArtifact = useMemo(() => generatedArtifact ?? savedCapability, [generatedArtifact]);
   const artifactApproved = !generatedArtifact || artifactReview?.state === "approved";
   const busy = discoveryStatus === "running" || runStatus === "running" || agentStatus === "running" || handoff.owner === "resuming";
@@ -293,8 +298,12 @@ export default function Home() {
       setOperations(body.snapshot);
     } catch { setOperations(null); }
   }
+  async function loadJobs() {
+    try { const response = await fetch("/api/jobs", { cache: "no-store" }); if (!response.ok) throw new Error(); const body = await response.json() as { jobs: AutomationJob[] }; setJobs(body.jobs); }
+    catch { setJobs([]); }
+  }
   useEffect(() => {
-    const timer = window.setTimeout(() => { void loadHistory(); void loadCatalog(); void loadOperations(); }, 0);
+    const timer = window.setTimeout(() => { void loadHistory(); void loadCatalog(); void loadOperations(); void loadJobs(); }, 0);
     return () => { window.clearTimeout(timer); stopHumanCaptureRef.current?.(); };
   }, []);
 
@@ -358,6 +367,52 @@ export default function Home() {
     if (!verification.ok) throw new AutomationError("ticket_verification_failed", "policy_denied", "The signed invocation ticket could not be verified.");
     const verified = await verification.json() as { verified: true; invocation: VerifiedInvocation };
     return verified.invocation;
+  }
+
+  async function verifyTicket(ticket: InvocationTicket): Promise<VerifiedInvocation> {
+    setActiveTicket(ticket);
+    const response = await fetch("/api/capabilities", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ticket }) });
+    if (!response.ok) throw new AutomationError("ticket_verification_failed", "policy_denied", "The signed invocation ticket could not be verified.");
+    return ((await response.json()) as { invocation: VerifiedInvocation }).invocation;
+  }
+
+  async function claimJob(jobId: string) {
+    const response = await fetch("/api/jobs", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "claim", jobId }) });
+    if (!response.ok) throw new Error("job claim failed");
+    const body = await response.json() as { ticket: InvocationTicket };
+    return verifyTicket(body.ticket);
+  }
+
+  async function updateJob(jobId: string, status: ReplayResult["status"], result: ReplayResult) {
+    await fetch("/api/jobs", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "complete", jobId, status, result: { runId: result.runId, status: result.status } }) });
+    await loadJobs(); await loadOperations();
+  }
+
+  async function enqueueJob() {
+    if (jobState === "running" || memberId.length !== 5) return;
+    setJobState("running");
+    try { await fetch("/api/jobs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ capabilityName: savedCapability.name, version: savedCapability.version, variantId: selectedVariant, inputs: { memberId } }) }); await loadJobs(); await loadOperations(); }
+    finally { setJobState("idle"); }
+  }
+
+  async function runJob(job: AutomationJob) {
+    if (jobState === "running") return; setJobState("running"); setAgentStatus("running"); setAgentLogs([]);
+    try { const invocation = await claimJob(job.jobId); const executed = await executeAgentTicket(invocation, "job"); setAgentResult(executed.result); setAgentStatus(executed.result.status); await updateJob(job.jobId, executed.result.status, executed.result); }
+    catch { setAgentStatus("failure"); await loadJobs(); }
+    finally { setJobState("idle"); }
+  }
+
+  async function rehydrateIntervention(job: AutomationJob) {
+    const frame = frameRef.current; if (!frame || jobState === "running") return;
+    setJobState("running");
+    try {
+      const invocation = await claimJob(job.jobId); handoffJobRef.current = job.jobId; handoffInvocationRef.current = invocation;
+      setMemberId(invocation.inputs.memberId); setMode("handoff"); setHandoff(INITIAL_HANDOFF_STATE); setReplayLogs([]); setRunStatus("running");
+      const result = await executeCapability({ artifact: invocation.artifact, inputs: invocation.inputs, origin: window.location.origin, adapter: createReplayAdapter(frame, () => ++runCounterRef.current), onEvidence: (evidence) => setReplayLogs((items) => [...items, toReplayLog(evidence)]) });
+      setReplayResult(result); setRunStatus(result.status);
+      if (result.status === "human_required") { resumeRef.current = result.resume; setHandoff(transitionHandoff(INITIAL_HANDOFF_STATE, { type: "request", interventionId: result.runId })); await updateJob(job.jobId, "human_required", result); }
+      else await updateJob(job.jobId, result.status, result);
+    } finally { setJobState("idle"); }
   }
 
   async function executeAgentTicket(ticket: VerifiedInvocation, runLabel: string): Promise<{ result: ReplayResult; stabilityRun: StabilityRun }> {
@@ -434,7 +489,7 @@ export default function Home() {
   async function startHandoff() {
     const frame = frameRef.current; if (!frame || busy) return;
     if (!artifactApproved || (generatedArtifact && (await registerArtifact(generatedArtifact))?.state !== "approved")) return;
-    stopHumanCaptureRef.current?.(); resumeRef.current = null; setMemberId("31415"); setHandoff(INITIAL_HANDOFF_STATE);
+    stopHumanCaptureRef.current?.(); resumeRef.current = null; handoffJobRef.current = null; handoffInvocationRef.current = null; setMemberId("31415"); setHandoff(INITIAL_HANDOFF_STATE);
     setRunStatus("running"); setReplayLogs([]); setReplayResult(null);
     const result = await executeCapability({ artifact: activeArtifact, inputs: { memberId: "31415" }, origin: window.location.origin, adapter: createReplayAdapter(frame, () => ++runCounterRef.current), onEvidence: (evidence) => setReplayLogs((items) => [...items, toReplayLog(evidence)]) });
     setReplayResult(result); setRunStatus(result.status);
@@ -455,10 +510,13 @@ export default function Home() {
     const frame = frameRef.current; const resume = resumeRef.current; if (!frame || !resume || handoff.owner !== "human") return;
     stopHumanCaptureRef.current?.(); stopHumanCaptureRef.current = null;
     setHandoff((state) => transitionHandoff(state, { type: "resume" })); setRunStatus("running");
-    const result = await executeCapability({ artifact: activeArtifact, inputs: { memberId: "31415" }, origin: window.location.origin, adapter: createReplayAdapter(frame, () => ++runCounterRef.current), resume, humanActions: handoff.actions, onEvidence: (evidence) => setReplayLogs((items) => [...items, toReplayLog(evidence)]) });
+    const jobInvocation = handoffInvocationRef.current;
+    const result = await executeCapability({ artifact: jobInvocation?.artifact ?? activeArtifact, inputs: jobInvocation?.inputs ?? { memberId: "31415" }, origin: window.location.origin, adapter: createReplayAdapter(frame, () => ++runCounterRef.current), resume, humanActions: handoff.actions, onEvidence: (evidence) => setReplayLogs((items) => [...items, toReplayLog(evidence)]) });
     setReplayLogs(result.evidence.map(toReplayLog)); setReplayResult(result); setRunStatus(result.status);
     if (result.status === "success") setHandoff((state) => transitionHandoff(state, { type: "complete" }));
-    await persistRun({ runId: result.runId, kind: "handoff", status: result.status === "human_required" ? "failure" : result.status, artifactName: activeArtifact.name, artifactVersion: activeArtifact.version, summary: { eventCount: result.evidence.length, outcome: result.status, humanActionCount: handoff.actions.length }, evidence: result.evidence, artifact: activeArtifact });
+    const completedArtifact = jobInvocation?.artifact ?? activeArtifact;
+    await persistRun({ runId: result.runId, kind: "handoff", status: result.status === "human_required" ? "failure" : result.status, artifactName: completedArtifact.name, artifactVersion: completedArtifact.version, summary: { eventCount: result.evidence.length, outcome: result.status, humanActionCount: handoff.actions.length, jobId: handoffJobRef.current }, evidence: result.evidence, artifact: completedArtifact });
+    if (handoffJobRef.current) await updateJob(handoffJobRef.current, result.status === "human_required" ? "failure" : result.status, result);
   }
 
   function useGeneratedArtifact() { setMode("replay"); setRunStatus("idle"); setReplayLogs([]); setReplayResult(null); setRecoveryStatus(null); }
@@ -480,7 +538,7 @@ export default function Home() {
   return <main className="console-shell">
     <header className="topbar"><div className="brand-lockup"><span className="brand-mark">NC</span><div><p className="eyebrow">Northstar Automation Lab</p><h1>Computer-Use Control Plane</h1></div></div><div className="environment-badge"><span /> Protected demo</div></header>
 
-    <section className="overview-grid phase-two-overview"><div><p className="section-kicker">Phase 7 · Operational trust</p><h2>Sign every invocation, bound every caller, watch every run.</h2><p className="lede">Short-lived owner-bound tickets are verified before execution. Durable rate limits, operational telemetry, and version-aware evidence re-encryption close the production control loop.</p></div><dl className="capability-facts"><div><dt>Ticket lifetime</dt><dd>120 seconds</dd></div><div><dt>Rate limit</dt><dd>12 / minute / owner</dd></div><div><dt>Telemetry</dt><dd>24-hour health</dd></div><div><dt>Key rotation</dt><dd>Version-aware rewrap</dd></div></dl></section>
+    <section className="overview-grid phase-two-overview"><div><p className="section-kicker">Phase 8 · Durable orchestration</p><h2>Queue the work, recover interventions, surface risk.</h2><p className="lede">Encrypted owner-scoped jobs can be claimed later from another device. Human-required work rehydrates its deterministic path, while derived alerts turn operational telemetry into action.</p></div><dl className="capability-facts"><div><dt>Queue</dt><dd>Durable + encrypted</dd></div><div><dt>Worker lease</dt><dd>3 minutes</dd></div><div><dt>Recovery</dt><dd>Cross-device rehydrate</dd></div><div><dt>Alerts</dt><dd>5 policy thresholds</dd></div></dl></section>
 
     <nav className="mode-switch" aria-label="Automation mode">
       <button className={mode === "discover" ? "active" : ""} onClick={() => setMode("discover")} disabled={busy}><span>01</span> Discover</button>
@@ -512,7 +570,8 @@ export default function Home() {
           {activeTicket && <div className="ticket-card"><span>Signed invocation ticket</span><strong>{activeTicket.signature.slice(0, 13)}…</strong><small>{activeTicket.variant.id} · expires {formatTime(activeTicket.expiresAt)} · hash {activeTicket.artifactHash.slice(0, 10)}</small></div>}
           <ResultCard result={agentResult} />
           {stability && <div className={`stability-card ${stability.label}`}><div><span>Multi-run stability</span><strong>{stability.label.replace("_", " ")}</strong></div><b>{Math.round(stability.successRate * 100)}%</b><small>{stability.successfulRuns}/{stability.totalRuns} successful · {stability.recoveredRuns} recovered</small></div>}
-          <div className="operations-card"><div className="operations-heading"><div><span>24-hour operations</span><strong>{operations ? `${Math.round(operations.successRate * 100)}% success` : "Loading telemetry"}</strong></div><button onClick={() => void loadOperations()}>Refresh</button></div><dl><div><dt>Issued / verified</dt><dd>{operations ? `${operations.ticketsIssued} / ${operations.ticketsVerified}` : "—"}</dd></div><div><dt>Rejected / limited</dt><dd>{operations ? `${operations.ticketsRejected} / ${operations.rateLimited}` : "—"}</dd></div><div><dt>Agent runs</dt><dd>{operations?.agentRuns ?? "—"}</dd></div><div><dt>Recovered</dt><dd>{operations?.recoveredRuns ?? "—"}</dd></div></dl><div className="key-rotation"><span>Evidence key {operations?.currentKeyVersion ?? "managed"}</span><small>{operations?.staleEvidenceRows ?? 0} rows awaiting rotation</small><button onClick={() => void rotateEvidence()} disabled={!operations || operations.staleEvidenceRows === 0 || !operations.previousKeyConfigured || rotationState === "running"}>{rotationState === "running" ? "Rotating…" : operations?.staleEvidenceRows ? "Rotate evidence" : "Rotation current"}</button></div></div>
+          <div className="jobs-card"><div className="operations-heading"><div><span>Durable job queue</span><strong>{jobs.filter((job) => ["queued", "human_required"].includes(job.status)).length} waiting</strong></div><button onClick={() => void enqueueJob()} disabled={jobState === "running"}>{jobState === "running" ? "Working…" : "Enqueue current"}</button></div><ol>{jobs.length === 0 && <li className="job-empty">No durable jobs yet.</li>}{jobs.slice(0, 6).map((job) => <li key={job.jobId}><div><strong>{job.variantId}</strong><small>{job.status.replace("_", " ")} · {new Date(job.createdAt).toLocaleTimeString()}</small></div>{job.status === "queued" && <button onClick={() => void runJob(job)}>Run</button>}{job.status === "human_required" && <button onClick={() => void rehydrateIntervention(job)}>Rehydrate</button>}</li>)}</ol></div>
+          <div className="operations-card"><div className="operations-heading"><div><span>24-hour operations</span><strong>{operations ? `${Math.round(operations.successRate * 100)}% success` : "Loading telemetry"}</strong></div><button onClick={() => { void loadOperations(); void loadJobs(); }}>Refresh</button></div>{operations && operations.alerts.length > 0 && <div className="alert-stack">{operations.alerts.map((alert) => <p key={alert.code} className={alert.severity}><strong>{alert.code.replaceAll("_", " ")}</strong><span>{alert.message}</span></p>)}</div>}{operations?.alerts.length === 0 && <div className="all-clear">No active operational alerts.</div>}<dl><div><dt>Issued / verified</dt><dd>{operations ? `${operations.ticketsIssued} / ${operations.ticketsVerified}` : "—"}</dd></div><div><dt>Rejected / limited</dt><dd>{operations ? `${operations.ticketsRejected} / ${operations.rateLimited}` : "—"}</dd></div><div><dt>Queued jobs</dt><dd>{operations?.queuedJobs ?? "—"}</dd></div><div><dt>Interventions</dt><dd>{operations?.humanRequiredJobs ?? "—"}</dd></div></dl><div className="key-rotation"><span>Evidence key {operations?.currentKeyVersion ?? "managed"}</span><small>{operations?.staleEvidenceRows ?? 0} rows awaiting rotation</small><button onClick={() => void rotateEvidence()} disabled={!operations || operations.staleEvidenceRows === 0 || !operations.previousKeyConfigured || rotationState === "running"}>{rotationState === "running" ? "Rotating…" : operations?.staleEvidenceRows ? "Rotate evidence" : "Rotation current"}</button></div></div>
         </div>}
 
         <div className="log-header"><span>{mode === "discover" ? "Discovery evidence" : mode === "handoff" ? "Handoff evidence" : mode === "catalog" ? "Agent invocation evidence" : "Replay evidence"}</span><span>{activeLogs.length} events</span></div><ol className="event-log phase-two-log">{activeLogs.length === 0 && <li className="log-empty">No evidence yet.</li>}{activeLogs.map((log, index) => <li key={`${log.time}-${index}`} className={log.state}><span className="log-marker" /><div><strong>{log.step}</strong><p>{log.detail}</p>{log.provider && <small>{log.provider}</small>}</div><time>{log.time}</time></li>)}</ol>

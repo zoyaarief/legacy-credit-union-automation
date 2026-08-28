@@ -1,0 +1,6 @@
+{
+  "phase": 8,
+  "jobs": { "storage": "D1", "inputs": "AES-256-GCM encrypted", "leaseSeconds": 180, "ownerScoped": true },
+  "crossDeviceRecovery": { "durableStatus": "human_required", "strategy": "deterministic rehydrate to intervention checkpoint", "sessionTransferred": false },
+  "alerts": ["success_rate_low", "ticket_rejections_high", "job_backlog", "intervention_waiting", "key_rotation_pending"]
+}

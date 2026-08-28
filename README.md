@@ -1,6 +1,6 @@
 # Legacy Credit Union Computer-Use Automation
 
-Phase 7 adds short-lived owner-bound ticket signatures, durable invocation limits, operational telemetry, and version-aware evidence-key rotation to the complete discovery, approval, replay, recovery, agent invocation, and human-handoff slice.
+Phase 8 adds an encrypted durable job queue, leased browser workers, cross-device intervention rehydration, and policy-derived operational alerts.
 
 ## What works
 
@@ -28,6 +28,9 @@ Phase 7 adds short-lived owner-bound ticket signatures, durable invocation limit
 - Atomic D1 rate limits of 12 ticket issues per owner per minute
 - Owner-scoped 24-hour telemetry for tickets, rejections, agent runs, outcomes, and recoveries
 - Current/previous evidence keyring support with bounded re-encryption batches
+- Owner-scoped asynchronous jobs with encrypted inputs and three-minute worker leases
+- Durable `human_required` jobs that can be rehydrated on another signed-in device
+- Five alert policies covering success rate, ticket rejection, backlog, waiting intervention, and key rotation
 - Unit coverage for replay, recovery, encryption, discovery, model validation, storage policy, artifact fingerprints, fault classification, and handoff transitions
 
 ## Run locally
@@ -54,6 +57,7 @@ Open `http://localhost:3000`.
 - Choose a retention window or delete a stored run from the audit trail.
 - Open **Human handoff**, start the assisted replay, accept control, click **Continue lookup** inside the live target, then resume automation.
 - Open **Agent API**, select a reviewed tenant profile, invoke it, or run the three-canary stability score.
+- Enqueue the current invocation, run it later, or rehydrate a waiting intervention from the durable job queue.
 - Open `/legacy` to operate the target manually.
 
 ## Verify
@@ -70,6 +74,7 @@ pnpm run build
 - `app/page.tsx` — discovery, replay, handoff, agent catalog console, and browser adapters
 - `app/api/capabilities/route.ts` — authenticated catalog and typed invocation-ticket API
 - `app/api/operations/route.ts` — owner-scoped telemetry and bounded evidence-key rotation
+- `app/api/jobs/route.ts` — encrypted durable jobs, leasing, claiming, completion, and cancellation
 - `app/api/discovery/decide/route.ts` — server-only discovery provider boundary
 - `app/api/runs/route.ts` — authenticated durable history, expiry, integrity hashes, and deletion
 - `app/api/artifacts/route.ts` — owner-scoped exact-artifact review and approval
@@ -81,6 +86,7 @@ pnpm run build
 - `lib/automation/stability.ts` — multi-run stability scoring
 - `lib/operations/` — durable rate limits, telemetry events, and health summaries
 - `lib/security/invocation.ts` — owner-bound HMAC ticket signing and verification
+- `lib/jobs/core.ts` — durable job contracts
 - `lib/handoff/` — control-transfer state machine
 - `capabilities/` — reviewed capability artifacts
 - `evidence/` — redacted example run evidence
@@ -89,4 +95,4 @@ pnpm run build
 
 ## Next phase
 
-Phase 8: durable asynchronous job execution, resumable cross-device interventions, and alert thresholds over operational telemetry. True reviewer/operator separation still requires multiple authenticated users and remains a deployment concern rather than a simulated identity toggle.
+Phase 9: external alert delivery, scheduled unattended workers, and real multi-principal reviewer/operator roles.

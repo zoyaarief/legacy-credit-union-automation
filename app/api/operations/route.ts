@@ -30,6 +30,7 @@ type EventRow = { event_type: string };
 type SummaryRow = { status: string; summary_json: string };
 type CountRow = { count: number };
 type RotationRow = { id: string; evidence_hash: string; evidence_ciphertext: string; evidence_iv: string; evidence_key_version: string };
+type JobStatusRow = { status: string };
 
 export async function GET(request: Request) {
   const owner = ownerId(request);
@@ -39,10 +40,11 @@ export async function GET(request: Request) {
     await ensureRunStore(database);
     const cutoff = new Date(Date.now() - 86_400_000).toISOString();
     const keys = keyring();
-    const [events, runs, stale] = await Promise.all([
+    const [events, runs, stale, jobs] = await Promise.all([
       database.prepare("SELECT event_type FROM operational_events WHERE owner_id = ? AND created_at >= ? ORDER BY created_at DESC LIMIT 500").bind(owner, cutoff).all<EventRow>(),
       database.prepare("SELECT status, summary_json FROM automation_runs WHERE owner_id = ? AND run_kind = 'agent_invocation' AND created_at >= ? ORDER BY created_at DESC LIMIT 200").bind(owner, cutoff).all<SummaryRow>(),
       database.prepare("SELECT COUNT(*) AS count FROM automation_runs WHERE owner_id = ? AND evidence_ciphertext IS NOT NULL AND evidence_key_version != ?").bind(owner, keys.currentVersion).all<CountRow>(),
+      database.prepare("SELECT status FROM automation_jobs WHERE owner_id = ? AND status IN ('queued', 'human_required') LIMIT 200").bind(owner).all<JobStatusRow>(),
     ]);
     const runSummaries = (runs.results ?? []).map((row) => {
       const summary = JSON.parse(row.summary_json) as { recovered?: boolean };
@@ -52,6 +54,7 @@ export async function GET(request: Request) {
       eventTypes: (events.results ?? []).map((row) => row.event_type), runSummaries,
       currentKeyVersion: keys.currentVersion, staleEvidenceRows: Number(stale.results?.[0]?.count ?? 0),
       previousKeyConfigured: Boolean(keys.previousSecret && keys.previousVersion),
+      jobStatuses: (jobs.results ?? []).map((row) => row.status),
     }) }, { headers: { "Cache-Control": "no-store" } });
   } catch {
     return Response.json({ error: "operations_unavailable" }, { status: 503 });

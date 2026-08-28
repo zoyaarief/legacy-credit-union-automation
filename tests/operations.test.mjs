@@ -38,7 +38,7 @@ test("rate-limit windows are deterministic and expose a fixed owner budget", () 
 
 test("operational summary derives ticket, run, recovery, and rotation posture", () => {
   const summary = summarizeOperations({
-    eventTypes: ["ticket_issued", "ticket_issued", "ticket_verified", "ticket_rejected", "ticket_rate_limited"],
+    eventTypes: ["ticket_issued", "ticket_issued", "ticket_verified", "ticket_rejected", "ticket_rejected", "ticket_rate_limited"],
     runSummaries: [{ status: "success" }, { status: "success", recovered: true }, { status: "failure" }],
     currentKeyVersion: "v2",
     staleEvidenceRows: 4,
@@ -50,4 +50,16 @@ test("operational summary derives ticket, run, recovery, and rotation posture", 
   assert.equal(summary.successRate, 2 / 3);
   assert.equal(summary.recoveredRuns, 1);
   assert.equal(summary.staleEvidenceRows, 4);
+  assert.ok(summary.alerts.some((alert) => alert.code === "success_rate_low"));
+  assert.ok(summary.alerts.some((alert) => alert.code === "ticket_rejections_high"));
+  assert.ok(summary.alerts.some((alert) => alert.code === "key_rotation_pending"));
+});
+
+test("operational alerts surface durable job backlog and waiting interventions", () => {
+  const summary = summarizeOperations({ eventTypes: [], runSummaries: [], currentKeyVersion: "v2", staleEvidenceRows: 0, previousKeyConfigured: false,
+    jobStatuses: ["queued", "queued", "queued", "queued", "queued", "human_required"] });
+  assert.equal(summary.queuedJobs, 5);
+  assert.equal(summary.humanRequiredJobs, 1);
+  assert.ok(summary.alerts.some((alert) => alert.code === "job_backlog"));
+  assert.ok(summary.alerts.some((alert) => alert.code === "intervention_waiting"));
 });

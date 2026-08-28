@@ -46,6 +46,14 @@ The runtime accepts a current and previous evidence key. Reads resolve the secre
 
 Operational events contain no invocation values. Ticket issue, verification, rejection, limiting, agent-run storage, and evidence rotation are owner-scoped in D1. The console summarizes the last 24 hours, including success and recovery rates, and exposes current key-version posture. Telemetry failures never change the automation contract result.
 
+## Durable jobs & cross-device recovery
+
+Jobs persist encrypted typed inputs, canonical artifact identity, status, lease, and redacted result metadata in D1. A browser worker claims a job for three minutes, receives a fresh signed ticket, verifies it through the existing catalog boundary, and uses the same deterministic executor. Expired leases are reclaimable.
+
+`human_required` is a durable job status. Another signed-in device can claim it, decrypt its inputs server-side, and deterministically rehydrate the target to the intervention checkpoint before handing control to the operator. The browser session itself is not transferred across devices; the safe read-only path is replayed and revalidated.
+
+Operational alerts are derived from stored state rather than client counters: low success rate, elevated ticket rejection, queue backlog, waiting intervention, and pending key rotation. Alerts remain in-product; external delivery is deferred.
+
 ## Cuts
 
-Phase 7 completes signed ticket verification, durable catalog rate limiting, operational telemetry, and bounded evidence-key rotation. The richer failure signal remains a redacted structured surface snapshot rather than a screenshot to avoid capturing regulated values. The private demo has one authenticated owner, so separate reviewer/operator identities and multi-party approval are not fabricated in client state; they require multiple real principals and server-managed role assignments. Asynchronous server-side jobs, alert delivery, broader network/permission faults, and cross-device continuation remain deliberate cuts. Live model execution still requires a configured server-side API key; the safe simulator keeps the core runnable without one.
+Phase 8 completes encrypted durable jobs, lease recovery, cross-device intervention rehydration, and in-product alert thresholds. The private demo has one authenticated owner, so separate reviewer/operator identities and multi-party approval are not fabricated in client state. External alert delivery, scheduled unattended browser workers, broader network faults, and real multi-principal authorization remain deliberate cuts.

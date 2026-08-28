@@ -18,7 +18,7 @@ export async function consumeInvocationQuota(database: D1Database, ownerId: stri
 export async function recordOperationalEvent(
   database: D1Database,
   ownerId: string,
-  eventType: "ticket_issued" | "ticket_verified" | "ticket_rejected" | "ticket_rate_limited" | "agent_run_stored" | "evidence_rotated",
+  eventType: "ticket_issued" | "ticket_verified" | "ticket_rejected" | "ticket_rate_limited" | "agent_run_stored" | "evidence_rotated" | "job_queued" | "job_claimed" | "job_completed",
   outcome: "ok" | "rejected" | "error",
   metadata: Record<string, unknown> = {},
   latencyMs = 0,
