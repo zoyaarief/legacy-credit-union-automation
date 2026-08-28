@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 
 type Member = { id:string; name:string; shareNumber:string; balance:string; status:string; lastActivity:string };
 const MEMBERS: Record<string, Member> = {
@@ -15,15 +15,25 @@ export default function LegacyPortal() {
   const [searched,setSearched] = useState(false);
   const [loading,setLoading] = useState(false);
   const [permissionPending,setPermissionPending] = useState(false);
+  const [faultState,setFaultState] = useState<"session_expired"|"application_error"|null>(null);
+
+  useEffect(() => {
+    document.documentElement.dataset.automationReady = "true";
+    return () => { delete document.documentElement.dataset.automationReady; };
+  }, []);
 
   function search(event:FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const submittedMemberNumber = String(new FormData(event.currentTarget).get("member_number") ?? "");
-    setMemberNumber(submittedMemberNumber); setLoading(true); setSearched(false); setMember(null); setPermissionPending(false);
+    const fault = new URLSearchParams(window.location.search).get("fault");
+    const delay = fault === "slow_load" ? 6000 : 650;
+    setMemberNumber(submittedMemberNumber); setLoading(true); setSearched(false); setMember(null); setPermissionPending(false); setFaultState(null);
     window.setTimeout(() => {
+      if (fault === "session_expired") { setFaultState("session_expired"); setLoading(false); return; }
+      if (fault === "application_error") { setFaultState("application_error"); setLoading(false); return; }
       if (submittedMemberNumber === "31415") { setPermissionPending(true); setLoading(false); return; }
       setMember(MEMBERS[submittedMemberNumber] || null); setSearched(true); setLoading(false);
-    },650);
+    },delay);
   }
 
   function approveRestrictedLookup() {
@@ -43,7 +53,7 @@ export default function LegacyPortal() {
             <tr><th>Member Number:</th><td><input name="member_number" value={memberNumber} onChange={(event)=>setMemberNumber(event.target.value.replace(/\D/g,"").slice(0,5))} maxLength={5} autoComplete="off" /></td></tr>
             <tr><th>Inquiry Type:</th><td><select name="inquiry_type" defaultValue="summary"><option value="summary">Member / Account Summary</option><option value="shares">Share Accounts Only</option></select></td></tr>
           </tbody></table>
-          <div className="legacy-actions"><button type="submit" disabled={loading}>{loading?"PLEASE WAIT...":"Retrieve Record"}</button><button type="button" onClick={()=>{setMemberNumber("");setMember(null);setSearched(false);setPermissionPending(false)}}>Clear</button></div>
+          <div className="legacy-actions"><button type="submit" disabled={loading}>{loading?"PLEASE WAIT...":"Retrieve Record"}</button><button type="button" onClick={()=>{setMemberNumber("");setMember(null);setSearched(false);setPermissionPending(false);setFaultState(null)}}>Clear</button></div>
         </form>
       </div>
       {permissionPending && <div id="permission-dialog" className="legacy-dialog" role="dialog" aria-labelledby="permission-title">
@@ -51,6 +61,8 @@ export default function LegacyPortal() {
         <p>This restricted account requires an operator acknowledgment before the inquiry can continue.</p>
         <div className="legacy-actions"><button type="button" onClick={approveRestrictedLookup}>Continue lookup</button></div>
       </div>}
+      {faultState === "session_expired" && <div id="session-expired" className="legacy-message"><strong>SESSION 401:</strong> OPERATOR SESSION EXPIRED. SIGN IN AGAIN BEFORE RETRY.</div>}
+      {faultState === "application_error" && <div id="application-error" className="legacy-message"><strong>SYSTEM 500:</strong> CORE MEMBER SERVICES IS UNAVAILABLE.</div>}
       {searched && !member && <div id="not-found" className="legacy-message"><strong>MESSAGE 104:</strong> MEMBER NUMBER NOT FOUND. VERIFY NUMBER AND RETRY.</div>}
       {member && <div id="member-summary" className="legacy-window member-result">
         <div className="legacy-window-title">Member / Account Summary</div>

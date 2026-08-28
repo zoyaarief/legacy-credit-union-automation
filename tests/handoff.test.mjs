@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { INITIAL_HANDOFF_STATE, transitionHandoff } from "../lib/handoff/core.ts";
-import { sanitizeRunRecord } from "../lib/persistence/contracts.ts";
+import { capabilityFingerprint, sanitizeRunRecord, sha256 } from "../lib/persistence/contracts.ts";
+import { readFile } from "node:fs/promises";
+
+const artifactUrl = new URL("../capabilities/get-savings-balance.v1.json", import.meta.url);
 
 test("handoff ownership follows request, accept, human action, resume, and complete", () => {
   let state = transitionHandoff(INITIAL_HANDOFF_STATE, { type: "request", interventionId: "run-1" });
@@ -31,4 +34,30 @@ test("durable run records redact sensitive values before storage", () => {
   });
   assert.equal(JSON.stringify(record).includes("31415"), false);
   assert.ok(JSON.stringify(record).includes("[REDACTED_ID]"));
+  assert.equal(record.retentionDays, 30);
+});
+
+test("retention is restricted to the supported policy windows", () => {
+  const base = {
+    runId: "run-retention", kind: "replay", status: "success",
+    artifactName: "get_savings_balance", artifactVersion: "1.0.0", summary: {}, evidence: [],
+  };
+  assert.equal(sanitizeRunRecord({ ...base, retentionDays: 7 }).retentionDays, 7);
+  assert.equal(sanitizeRunRecord({ ...base, retentionDays: 365 }).retentionDays, 30);
+});
+
+test("evidence hashes are deterministic and tamper evident", async () => {
+  const evidence = [{ sequence: 1, outcome: "ok", detail: "policy approved" }];
+  const first = await sha256(evidence);
+  assert.equal(first, await sha256(structuredClone(evidence)));
+  assert.notEqual(first, await sha256([{ ...evidence[0], outcome: "error" }]));
+  assert.match(first, /^[a-f0-9]{64}$/);
+});
+
+test("artifact approval fingerprints bind to the exact capability", async () => {
+  const artifact = JSON.parse(await readFile(artifactUrl, "utf8"));
+  const approved = await capabilityFingerprint(artifact);
+  const modified = structuredClone(artifact);
+  modified.description = `${modified.description} changed`;
+  assert.notEqual(approved, await capabilityFingerprint(modified));
 });

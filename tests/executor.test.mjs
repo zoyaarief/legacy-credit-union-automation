@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { executeCapability, HumanInterventionError } from "../lib/automation/core.ts";
+import { AutomationError, executeCapability, HumanInterventionError } from "../lib/automation/core.ts";
 
 const artifactUrl = new URL("../capabilities/get-savings-balance.v1.json", import.meta.url);
 const artifact = JSON.parse(await readFile(artifactUrl, "utf8"));
@@ -121,3 +121,26 @@ test("executor pauses for a human and resumes the same prepared session", async 
   assert.ok(resumed.evidence.some((event) => event.action === "resume"));
   assert.equal(JSON.stringify(resumed.evidence).includes("31415"), false);
 });
+
+for (const fault of [
+  { code: "session_expired", category: "recoverable", retryable: true },
+  { code: "outcome_timeout", category: "recoverable", retryable: true },
+  { code: "application_unavailable", category: "hard_failure", retryable: false },
+]) {
+  test(`executor preserves the ${fault.code} fault classification`, async () => {
+    const result = await executeCapability({
+      artifact,
+      inputs: { memberId: "12345" },
+      adapter: adapter({
+        waitForOutcome: async () => {
+          throw new AutomationError(fault.code, fault.category, "Injected fault.", fault.retryable);
+        },
+      }),
+      ...fixed,
+    });
+    assert.equal(result.status, "failure");
+    assert.equal(result.error.code, fault.code);
+    assert.equal(result.error.category, fault.category);
+    assert.equal(result.error.retryable, fault.retryable);
+  });
+}

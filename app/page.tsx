@@ -29,7 +29,7 @@ import {
 } from "@/lib/discovery/core";
 import { createAdaptiveDiscoveryProvider } from "@/lib/discovery/provider-client";
 import { INITIAL_HANDOFF_STATE, transitionHandoff, type HandoffState } from "@/lib/handoff/core";
-import type { RunRecordInput } from "@/lib/persistence/contracts";
+import type { ArtifactReview, RunRecord, RunRecordInput } from "@/lib/persistence/contracts";
 
 const savedCapability = validateCapability(rawCapability);
 const pause = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -38,7 +38,8 @@ type Mode = "discover" | "replay" | "handoff";
 type RunStatus = "idle" | "running" | ReplayResult["status"];
 type DiscoveryStatus = "idle" | "running" | DiscoveryResult["status"];
 type LogEntry = { time: string; step: string; detail: string; state: "ok" | "warn" | "error"; provider?: string };
-type StoredRun = RunRecordInput & { createdAt: string };
+type StoredRun = RunRecord;
+type FaultMode = "none" | "session_expired" | "slow_load" | "application_error";
 
 function formatTime(value: string) {
   return new Intl.DateTimeFormat("en", { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(value));
@@ -71,11 +72,28 @@ function requireTarget(document: Document, target: ControlTarget) {
   return found;
 }
 
-async function reloadFrame(frame: HTMLIFrameElement, entryPoint: string, run: number) {
+async function reloadFrame(frame: HTMLIFrameElement, entryPoint: string, run: number, faultMode: FaultMode = "none") {
   await new Promise<void>((resolve, reject) => {
     const timer = window.setTimeout(() => reject(new AutomationError("target_timeout", "recoverable", "Target load timed out.", true)), 5000);
-    frame.onload = () => { window.clearTimeout(timer); resolve(); };
-    frame.src = `${entryPoint}?embedded=1&run=${run}`;
+    frame.onload = () => {
+      const readinessDeadline = Date.now() + 2000;
+      const checkReady = () => {
+        try {
+          if (frame.contentDocument?.documentElement.dataset.automationReady === "true") {
+            window.clearTimeout(timer); resolve(); return;
+          }
+        } catch {
+          window.clearTimeout(timer); reject(new AutomationError("policy_denied", "policy_denied", "The target surface became cross-origin.")); return;
+        }
+        if (Date.now() >= readinessDeadline) {
+          window.clearTimeout(timer); reject(new AutomationError("target_not_ready", "recoverable", "Target loaded but did not become interactive.", true)); return;
+        }
+        window.setTimeout(checkReady, 25);
+      };
+      checkReady();
+    };
+    const fault = faultMode === "none" ? "" : `&fault=${faultMode}`;
+    frame.src = `${entryPoint}?embedded=1&run=${run}${fault}`;
   });
 }
 
@@ -109,6 +127,8 @@ async function waitForOutcomes(frame: HTMLIFrameElement, outcomes: OutcomeDefini
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const document = getDocument(frame);
+    if (document.querySelector("#session-expired")) throw new AutomationError("session_expired", "recoverable", "The operator session expired before the result was available.", true);
+    if (document.querySelector("#application-error")) throw new AutomationError("application_unavailable", "hard_failure", "Core Member Services returned an application error.");
     if (document.querySelector("#permission-dialog")) {
       throw new HumanInterventionError(
         "operator_acknowledgment_required",
@@ -122,9 +142,9 @@ async function waitForOutcomes(frame: HTMLIFrameElement, outcomes: OutcomeDefini
   throw new AutomationError("outcome_timeout", "recoverable", "No declared outcome appeared before the step timeout.", true);
 }
 
-function createReplayAdapter(frame: HTMLIFrameElement, nextRun: () => number): SurfaceAdapter {
+function createReplayAdapter(frame: HTMLIFrameElement, nextRun: () => number, faultMode: FaultMode = "none"): SurfaceAdapter {
   return {
-    prepare: (entryPoint) => reloadFrame(frame, entryPoint, nextRun()),
+    prepare: (entryPoint) => reloadFrame(frame, entryPoint, nextRun(), faultMode),
     currentUrl: () => currentFrameUrl(frame),
     type: (target, value) => typeIntoTarget(frame, target, value),
     click: (target) => clickTarget(frame, target),
@@ -222,7 +242,11 @@ export default function Home() {
   const [handoff, setHandoff] = useState<HandoffState>(INITIAL_HANDOFF_STATE);
   const [history, setHistory] = useState<StoredRun[]>([]);
   const [storageState, setStorageState] = useState<"loading" | "ready" | "unavailable">("loading");
+  const [retentionDays, setRetentionDays] = useState<7 | 30 | 90>(30);
+  const [faultMode, setFaultMode] = useState<FaultMode>("none");
+  const [artifactReview, setArtifactReview] = useState<ArtifactReview | null>(null);
   const activeArtifact = useMemo(() => generatedArtifact ?? savedCapability, [generatedArtifact]);
+  const artifactApproved = !generatedArtifact || artifactReview?.state === "approved";
   const busy = discoveryStatus === "running" || runStatus === "running" || handoff.owner === "resuming";
 
   async function loadHistory() {
@@ -240,17 +264,27 @@ export default function Home() {
 
   async function persistRun(record: RunRecordInput) {
     try {
-      const response = await fetch("/api/runs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(record) });
+      const response = await fetch("/api/runs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...record, retentionDays }) });
       if (!response.ok) throw new Error("storage failed");
       await loadHistory();
     } catch { setStorageState("unavailable"); }
+  }
+
+  async function registerArtifact(artifact: Capability, approve = false) {
+    try {
+      const response = await fetch("/api/artifacts", { method: approve ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ artifact }) });
+      if (!response.ok) throw new Error("review failed");
+      const body = await response.json() as { review: ArtifactReview };
+      setArtifactReview(body.review);
+      return body.review;
+    } catch { setStorageState("unavailable"); return null; }
   }
 
   async function discover(event: FormEvent) {
     event.preventDefault(); const frame = frameRef.current; if (!frame || busy) return;
     setDiscoveryStatus("running"); setDiscoveryLogs([]); setDiscoveryResult(null); setGeneratedArtifact(null);
     const result = await runDiscovery({ goal, inputs: { memberId }, origin: window.location.origin, provider: createAdaptiveDiscoveryProvider(), adapter: createDiscoveryAdapter(frame, () => ++runCounterRef.current), onEvidence: (evidence) => setDiscoveryLogs((items) => [...items, toDiscoveryLog(evidence)]) });
-    if (result.status === "success") setGeneratedArtifact(result.artifact);
+    if (result.status === "success") { setGeneratedArtifact(result.artifact); await registerArtifact(result.artifact); }
     setDiscoveryResult(result); setDiscoveryStatus(result.status);
     await persistRun({ runId: result.runId, kind: "discovery", status: result.status, artifactName: result.status === "success" ? result.artifact.name : "get_savings_balance", artifactVersion: "1.0.0", provider: result.provider, summary: { eventCount: result.evidence.length, outcome: result.status }, evidence: result.evidence, artifact: result.status === "success" ? result.artifact : undefined });
   }
@@ -258,13 +292,17 @@ export default function Home() {
   async function replay(event: FormEvent) {
     event.preventDefault(); const frame = frameRef.current; if (!frame || busy) return;
     setRunStatus("running"); setReplayLogs([]); setReplayResult(null);
-    const result = await executeCapability({ artifact: activeArtifact, inputs: { memberId }, origin: window.location.origin, adapter: createReplayAdapter(frame, () => ++runCounterRef.current), onEvidence: (evidence) => setReplayLogs((items) => [...items, toReplayLog(evidence)]) });
+    if (!artifactApproved || (generatedArtifact && (await registerArtifact(generatedArtifact))?.state !== "approved")) {
+      setRunStatus("idle"); return;
+    }
+    const result = await executeCapability({ artifact: activeArtifact, inputs: { memberId }, origin: window.location.origin, adapter: createReplayAdapter(frame, () => ++runCounterRef.current, faultMode), onEvidence: (evidence) => setReplayLogs((items) => [...items, toReplayLog(evidence)]) });
     setReplayResult(result); setRunStatus(result.status);
     if (result.status !== "human_required") await persistRun({ runId: result.runId, kind: "replay", status: result.status, artifactName: activeArtifact.name, artifactVersion: activeArtifact.version, summary: { eventCount: result.evidence.length, outcome: result.status }, evidence: result.evidence, artifact: activeArtifact });
   }
 
   async function startHandoff() {
     const frame = frameRef.current; if (!frame || busy) return;
+    if (!artifactApproved || (generatedArtifact && (await registerArtifact(generatedArtifact))?.state !== "approved")) return;
     stopHumanCaptureRef.current?.(); resumeRef.current = null; setMemberId("31415"); setHandoff(INITIAL_HANDOFF_STATE);
     setRunStatus("running"); setReplayLogs([]); setReplayResult(null);
     const result = await executeCapability({ artifact: activeArtifact, inputs: { memberId: "31415" }, origin: window.location.origin, adapter: createReplayAdapter(frame, () => ++runCounterRef.current), onEvidence: (evidence) => setReplayLogs((items) => [...items, toReplayLog(evidence)]) });
@@ -293,9 +331,14 @@ export default function Home() {
   }
 
   function useGeneratedArtifact() { setMode("replay"); setRunStatus("idle"); setReplayLogs([]); setReplayResult(null); }
-  function restoreStoredArtifact(run: StoredRun) {
+  async function restoreStoredArtifact(run: StoredRun) {
     if (!run.artifact) return;
-    try { setGeneratedArtifact(validateCapability(run.artifact)); setMode("replay"); setRunStatus("idle"); setReplayResult(null); setReplayLogs([]); } catch { /* server already validates; ignore corrupt history */ }
+    try { const artifact = validateCapability(run.artifact); setGeneratedArtifact(artifact); await registerArtifact(artifact); setMode("replay"); setRunStatus("idle"); setReplayResult(null); setReplayLogs([]); } catch { /* server already validates; ignore corrupt history */ }
+  }
+
+  async function deleteRun(runId: string) {
+    const response = await fetch(`/api/runs?runId=${encodeURIComponent(runId)}`, { method: "DELETE" });
+    if (response.ok) await loadHistory();
   }
 
   const activeLogs = mode === "discover" ? discoveryLogs : replayLogs;
@@ -304,7 +347,7 @@ export default function Home() {
   return <main className="console-shell">
     <header className="topbar"><div className="brand-lockup"><span className="brand-mark">NC</span><div><p className="eyebrow">Northstar Automation Lab</p><h1>Computer-Use Control Plane</h1></div></div><div className="environment-badge"><span /> Protected demo</div></header>
 
-    <section className="overview-grid phase-two-overview"><div><p className="section-kicker">Phase 3 · Human handoff + durable evidence</p><h2>Automation pauses. A human takes the same session.</h2><p className="lede">Blocked runs route a redacted intervention request, cede the live surface to an operator, and resume deterministically with a complete audit trail.</p></div><dl className="capability-facts"><div><dt>Control states</dt><dd>5 explicit</dd></div><div><dt>Session</dt><dd>Preserved</dd></div><div><dt>Evidence</dt><dd>Durable + redacted</dd></div><div><dt>Storage</dt><dd>Per-user D1</dd></div></dl></section>
+    <section className="overview-grid phase-two-overview"><div><p className="section-kicker">Phase 4 · Production hardening</p><h2>Trust must be explicit, testable, and reviewable.</h2><p className="lede">Generated artifacts stay draft until approved. Evidence is hashed and retained by policy, while injected runtime failures verify that replay stops deliberately.</p></div><dl className="capability-facts"><div><dt>Artifact gate</dt><dd>Draft → approved</dd></div><div><dt>Integrity</dt><dd>SHA-256</dd></div><div><dt>Retention</dt><dd>7 / 30 / 90 days</dd></div><div><dt>Fault tests</dt><dd>3 injected</dd></div></dl></section>
 
     <nav className="mode-switch" aria-label="Automation mode">
       <button className={mode === "discover" ? "active" : ""} onClick={() => setMode("discover")} disabled={busy}><span>01</span> Discover</button>
@@ -319,10 +362,10 @@ export default function Home() {
 
         {mode === "discover" && <><form onSubmit={discover} className="run-form discovery-form"><label htmlFor="goal">Goal</label><textarea id="goal" value={goal} onChange={(event) => setGoal(event.target.value.slice(0, 500))} required minLength={12} maxLength={500} /><label htmlFor="discovery-member-id">Invocation input</label><div className="input-row"><input id="discovery-member-id" value={memberId} onChange={(event) => setMemberId(event.target.value.replace(/\D/g, "").slice(0, 5))} inputMode="numeric" required pattern="[0-9]{5}" /><button type="submit" disabled={busy || memberId.length !== 5}>{discoveryStatus === "running" ? "Discovering…" : "Discover capability"}</button></div><p>Use <button type="button" className="inline-button" onClick={() => setMemberId("12345")}>12345</button> for success. Sensitive values stay local.</p></form><div className="result-card discovery-result" aria-live="polite"><p className="result-label">Discovery result</p>{!discoveryResult && <p className="empty-result">Submit a goal to start the constrained loop.</p>}{discoveryResult?.status === "success" && <div className="success-result"><strong>{discoveryResult.artifact.name}</strong><span>{discoveryResult.artifact.steps.length} actions · {discoveryResult.provider}</span><div className="result-actions"><button onClick={useGeneratedArtifact}>Replay generated artifact</button><button className="secondary" onClick={() => downloadJson(`${discoveryResult.artifact.name}.json`, discoveryResult.artifact)}>Download JSON</button></div></div>}{discoveryResult?.status === "business_outcome" && <div className="outcome-result"><strong>{discoveryResult.code}</strong><span>{discoveryResult.message}</span></div>}{discoveryResult?.status === "failure" && <div className="failure-result"><strong>{discoveryResult.error.code}</strong><span>Step {discoveryResult.error.step} · {discoveryResult.error.message}</span></div>}</div></>}
 
-        {mode === "replay" && <><div className="artifact-source"><span>Artifact source</span><strong>{generatedArtifact ? "Generated or restored" : "Saved baseline"}</strong><small>{activeArtifact.name}@{activeArtifact.version}</small></div><form onSubmit={replay} className="run-form"><label htmlFor="replay-member-id">Member ID input</label><div className="input-row"><input id="replay-member-id" value={memberId} onChange={(event) => setMemberId(event.target.value.replace(/\D/g, "").slice(0, 5))} inputMode="numeric" required pattern="[0-9]{5}" /><button type="submit" disabled={busy || memberId.length !== 5}>{runStatus === "running" ? "Running…" : "Run capability"}</button></div><p>Try <button type="button" className="inline-button" onClick={() => setMemberId("12345")}>12345</button> or <button type="button" className="inline-button" onClick={() => setMemberId("00000")}>00000</button>.</p></form><ResultCard result={replayResult} /></>}
+        {mode === "replay" && <><div className="artifact-source"><span>Artifact source</span><strong>{generatedArtifact ? `Generated or restored · ${artifactReview?.state ?? "draft"}` : "Bundled baseline · approved"}</strong><small>{activeArtifact.name}@{activeArtifact.version}</small></div><form onSubmit={replay} className="run-form"><label htmlFor="replay-member-id">Member ID input</label><div className="input-row"><input id="replay-member-id" value={memberId} onChange={(event) => setMemberId(event.target.value.replace(/\D/g, "").slice(0, 5))} inputMode="numeric" required pattern="[0-9]{5}" /><button type="submit" disabled={busy || memberId.length !== 5 || !artifactApproved}>{runStatus === "running" ? "Running…" : artifactApproved ? "Run capability" : "Approval required"}</button></div><label htmlFor="fault-mode">Fault injection</label><select id="fault-mode" className="policy-select" value={faultMode} onChange={(event) => setFaultMode(event.target.value as FaultMode)}><option value="none">None — normal execution</option><option value="session_expired">Recoverable — session expired</option><option value="slow_load">Recoverable — slow load timeout</option><option value="application_error">Hard failure — application error</option></select><p>Try <button type="button" className="inline-button" onClick={() => setMemberId("12345")}>12345</button> or <button type="button" className="inline-button" onClick={() => setMemberId("00000")}>00000</button>. Injected faults never change the artifact.</p></form><ResultCard result={replayResult} /></>}
 
         {mode === "handoff" && <div className="handoff-console">
-          {handoff.owner === "automation" && <div className="handoff-intro"><p className="result-label">Assisted replay scenario</p><h4>Restricted-account acknowledgment</h4><p>Run the capability until it reaches an operator-only interstitial. The system will pause instead of bypassing it.</p><button onClick={startHandoff} disabled={busy}>Start assisted replay</button></div>}
+          {handoff.owner === "automation" && <div className="handoff-intro"><p className="result-label">Assisted replay scenario</p><h4>Restricted-account acknowledgment</h4><p>Run the capability until it reaches an operator-only interstitial. The system will pause instead of bypassing it.</p><button onClick={startHandoff} disabled={busy || !artifactApproved}>{artifactApproved ? "Start assisted replay" : "Approval required"}</button></div>}
           {handoff.owner === "human_requested" && replayResult?.status === "human_required" && <div className="intervention-card"><span className="route-badge">Intervention routed</span><h4>{replayResult.intervention.code}</h4><p>{replayResult.intervention.message}</p><dl><div><dt>Stopped at</dt><dd>{replayResult.intervention.stepId}</dd></div><div><dt>Surface state</dt><dd>{replayResult.intervention.snapshot.visibleSignals.join(", ")}</dd></div></dl><button onClick={acceptHumanControl}>Accept control</button></div>}
           {handoff.owner === "human" && <div className="human-control-card"><span className="route-badge human">Human in control</span><h4>Operate the live session</h4><ol><li>Click <strong>Continue lookup</strong> inside the target session.</li><li>Return here and resume automation.</li></ol><p>{handoff.actions.length} redacted human action{handoff.actions.length === 1 ? "" : "s"} captured.</p><button onClick={resumeAutomation} disabled={handoff.actions.length === 0}>Resume automation</button></div>}
           {handoff.owner === "resuming" && <div className="handoff-intro"><p className="result-label">Control returned</p><h4>Revalidating the live session…</h4></div>}
@@ -333,9 +376,9 @@ export default function Home() {
       </aside>
     </section>
 
-    {generatedArtifact && <section className="artifact-inspector"><div><p className="section-kicker">Compiled capability</p><h3>{generatedArtifact.name}</h3><p>The transcript is discarded; the durable artifact contains only approved actions, typed contracts, outcomes, and checkpoint.</p></div><dl><div><dt>Version</dt><dd>{generatedArtifact.version}</dd></div><div><dt>Steps</dt><dd>{generatedArtifact.steps.length}</dd></div><div><dt>Inputs</dt><dd>{Object.keys(generatedArtifact.inputs).join(", ")}</dd></div><div><dt>Outputs</dt><dd>{Object.keys(generatedArtifact.outputs).join(", ")}</dd></div></dl><pre>{JSON.stringify(generatedArtifact, null, 2)}</pre></section>}
+    {generatedArtifact && <section className="artifact-inspector"><div><p className="section-kicker">Compiled capability</p><h3>{generatedArtifact.name}</h3><p>The transcript is discarded. Unattended replay stays blocked until the signed-in reviewer explicitly approves this exact artifact fingerprint.</p><div className={`approval-card ${artifactReview?.state ?? "draft"}`}><span>{artifactReview?.state ?? "draft"}</span><strong>{artifactReview?.state === "approved" ? "Approved for replay" : "Review required"}</strong>{artifactReview?.state !== "approved" && <button onClick={() => void registerArtifact(generatedArtifact, true)}>Approve exact artifact</button>}</div></div><dl><div><dt>Version</dt><dd>{generatedArtifact.version}</dd></div><div><dt>Steps</dt><dd>{generatedArtifact.steps.length}</dd></div><div><dt>Inputs</dt><dd>{Object.keys(generatedArtifact.inputs).join(", ")}</dd></div><div><dt>Outputs</dt><dd>{Object.keys(generatedArtifact.outputs).join(", ")}</dd></div></dl><pre>{JSON.stringify(generatedArtifact, null, 2)}</pre></section>}
 
-    <section className="history-panel"><div><p className="section-kicker">Durable audit trail</p><h3>Saved runs</h3><p>Artifacts, outcomes, and redacted evidence are isolated to the signed-in user. Invocation values and model transcripts are never stored.</p></div><div className="history-status"><span className={storageState}>{storageState}</span><button onClick={() => void loadHistory()}>Refresh</button></div><ol>{history.length === 0 && <li className="history-empty">{storageState === "loading" ? "Loading run history…" : storageState === "unavailable" ? "Durable storage is unavailable in this environment." : "No saved runs yet."}</li>}{history.map((run) => <li key={run.runId}><div><span className={`history-kind ${run.kind}`}>{run.kind}</span><strong>{run.artifactName}@{run.artifactVersion}</strong><small>{new Date(run.createdAt).toLocaleString()}</small></div><span className={`history-outcome ${run.status}`}>{run.status.replace("_", " ")}</span>{Boolean(run.artifact) && <button onClick={() => restoreStoredArtifact(run)}>Use artifact</button>}</li>)}</ol></section>
+    <section className="history-panel"><div><p className="section-kicker">Policy-backed audit trail</p><h3>Saved runs</h3><p>Evidence is redacted, owner-scoped, SHA-256 fingerprinted, and automatically expired. Operators can delete a run immediately.</p><label className="retention-control" htmlFor="retention-days">New run retention<select id="retention-days" value={retentionDays} onChange={(event) => setRetentionDays(Number(event.target.value) as 7 | 30 | 90)}><option value={7}>7 days</option><option value={30}>30 days</option><option value={90}>90 days</option></select></label></div><div className="history-status"><span className={storageState}>{storageState}</span><button onClick={() => void loadHistory()}>Refresh</button></div><ol>{history.length === 0 && <li className="history-empty">{storageState === "loading" ? "Loading run history…" : storageState === "unavailable" ? "Durable storage is unavailable in this environment." : "No saved runs yet."}</li>}{history.map((run) => <li key={run.runId}><div><span className={`history-kind ${run.kind}`}>{run.kind}</span><strong>{run.artifactName}@{run.artifactVersion}</strong><small>{new Date(run.createdAt).toLocaleString()} · integrity {run.integrity}{run.evidenceHash ? ` ${run.evidenceHash.slice(0, 10)}` : ""} · expires {run.expiresAt ? new Date(run.expiresAt).toLocaleDateString() : "by policy"}</small></div><span className={`history-outcome ${run.status}`}>{run.status.replace("_", " ")}</span><div className="history-actions">{Boolean(run.artifact) && <button onClick={() => void restoreStoredArtifact(run)}>Use artifact</button>}<button className="delete" onClick={() => void deleteRun(run.runId)}>Delete</button></div></li>)}</ol></section>
   </main>;
 }
 

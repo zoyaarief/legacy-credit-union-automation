@@ -43,8 +43,31 @@ export async function ensureRunStore(database: D1Database) {
       summary_json TEXT NOT NULL,
       evidence_json TEXT NOT NULL,
       artifact_json TEXT,
-      created_at TEXT NOT NULL
+      evidence_hash TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL DEFAULT ''
     )`),
     database.prepare("CREATE INDEX IF NOT EXISTS idx_automation_runs_owner_created ON automation_runs(owner_id, created_at DESC)"),
+    database.prepare(`CREATE TABLE IF NOT EXISTS artifact_reviews (
+      id TEXT PRIMARY KEY NOT NULL,
+      owner_id TEXT NOT NULL,
+      artifact_hash TEXT NOT NULL,
+      artifact_name TEXT NOT NULL,
+      artifact_version TEXT NOT NULL,
+      state TEXT NOT NULL,
+      artifact_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      reviewed_at TEXT
+    )`),
+    database.prepare("CREATE INDEX IF NOT EXISTS idx_artifact_reviews_owner_state ON artifact_reviews(owner_id, state)"),
   ]);
+
+  // Local Miniflare databases can predate the checked-in migration. Keep the
+  // runtime bootstrap additive so an existing demo database remains usable.
+  const columns = await database.prepare("PRAGMA table_info(automation_runs)").all<{ name: string }>();
+  const names = new Set((columns.results ?? []).map((column) => column.name));
+  const additions: D1Statement[] = [];
+  if (!names.has("evidence_hash")) additions.push(database.prepare("ALTER TABLE automation_runs ADD evidence_hash TEXT NOT NULL DEFAULT ''"));
+  if (!names.has("expires_at")) additions.push(database.prepare("ALTER TABLE automation_runs ADD expires_at TEXT NOT NULL DEFAULT ''"));
+  if (additions.length > 0) await database.batch(additions);
 }

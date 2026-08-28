@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "1.0",
+  "phase": 4,
+  "artifactLifecycle": ["draft", "approved"],
+  "approvalBinding": "sha256(canonical_sanitized_artifact)",
+  "replayPolicy": "generated_or_restored_artifact_requires_exact_fingerprint_approval",
+  "evidencePolicy": {
+    "sensitiveValuesStored": false,
+    "integrity": "sha256(canonical_sanitized_evidence)",
+    "retentionDays": [7, 30, 90],
+    "deletionScope": "authenticated_owner_and_run_id"
+  },
+  "faultMatrix": [
+    { "fault": "session_expired", "category": "recoverable", "retryable": true },
+    { "fault": "outcome_timeout", "category": "recoverable", "retryable": true },
+    { "fault": "application_unavailable", "category": "hard_failure", "retryable": false }
+  ]
+}

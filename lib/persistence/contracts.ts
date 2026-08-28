@@ -14,9 +14,25 @@ export type RunRecordInput = {
   summary: Record<string, unknown>;
   evidence: Array<EvidenceEvent | DiscoveryEvidenceEvent>;
   artifact?: unknown;
+  retentionDays?: 7 | 30 | 90;
 };
 
-export type RunRecord = RunRecordInput & { createdAt: string };
+export type RunRecord = RunRecordInput & {
+  createdAt: string;
+  expiresAt: string;
+  evidenceHash: string;
+  integrity: "verified" | "mismatch" | "legacy";
+};
+
+export type ArtifactReview = {
+  artifactHash: string;
+  artifactName: string;
+  artifactVersion: string;
+  state: "draft" | "approved";
+  operatorRole: "reviewer";
+  createdAt: string;
+  reviewedAt: string | null;
+};
 
 function cleanValue(value: unknown): unknown {
   if (typeof value === "string") return redactDiscoveryText(value).slice(0, 1000);
@@ -51,5 +67,31 @@ export function sanitizeRunRecord(value: unknown): RunRecordInput {
     summary: cleanValue(input.summary) as Record<string, unknown>,
     evidence: cleanValue(input.evidence) as Array<EvidenceEvent | DiscoveryEvidenceEvent>,
     artifact,
+    retentionDays: [7, 30, 90].includes(Number(input.retentionDays)) ? Number(input.retentionDays) as 7 | 30 | 90 : 30,
   };
+}
+
+function canonicalize(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalize).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => `${JSON.stringify(key)}:${canonicalize(item)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+export async function sha256(value: unknown): Promise<string> {
+  const bytes = new TextEncoder().encode(canonicalize(value));
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+export async function capabilityFingerprint(value: unknown): Promise<string> {
+  return sha256(cleanValue(validateCapability(value)));
+}
+
+export function sanitizeCapabilityForStorage(value: unknown): Capability {
+  return cleanValue(validateCapability(value)) as Capability;
 }
