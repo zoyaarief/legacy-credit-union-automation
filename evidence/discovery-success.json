@@ -1,0 +1,21 @@
+{
+  "schemaVersion": "1.0",
+  "scenario": "goal-driven savings lookup discovery",
+  "status": "success",
+  "provider": "safe-simulator",
+  "sensitiveValuesStored": false,
+  "modelTranscriptStored": false,
+  "summary": {
+    "observations": 6,
+    "validatedActions": 5,
+    "checkpoint": "member_summary",
+    "compiledCapability": "get_savings_balance@1.0.0"
+  },
+  "actions": [
+    "type:member_number:<redacted>",
+    "click:retrieve_record",
+    "wait_for_outcome:success",
+    "extract:savings_balance->balance",
+    "extract:account_status->accountStatus"
+  ]
+}

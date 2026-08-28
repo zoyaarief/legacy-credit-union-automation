@@ -1,0 +1,13 @@
+{
+  "schemaVersion": "1.0",
+  "scenario": "generated artifact known business outcome",
+  "status": "business_outcome",
+  "artifact": "get_savings_balance@1.0.0",
+  "sensitiveValuesStored": false,
+  "businessOutcome": {
+    "code": "member_not_found",
+    "message": "No member matched the supplied identifier.",
+    "retryable": false
+  },
+  "eventCount": 4
+}

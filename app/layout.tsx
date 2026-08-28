@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Northstar Capability Replay Console",
-  description: "A deterministic computer-use automation milestone for a legacy credit-union application.",
+  title: "Northstar Discovery & Replay Console",
+  description: "Goal-driven computer-use discovery and deterministic capability replay for a synthetic legacy credit-union application.",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

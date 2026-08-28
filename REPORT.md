@@ -2,38 +2,36 @@
 
 ## Architecture
 
-The system is split into three seams: a versioned capability contract, a policy-checked executor, and a surface adapter. The current web adapter operates the local legacy portal through its live iframe session. The executor knows actions, inputs, outcomes, checkpoints, and evidence, but not React or DOM mechanics. This keeps deterministic replay testable and leaves a clean provider boundary for the next discovery phase.
+The system now has four seams: a goal-driven discovery engine, a provider boundary, a versioned capability contract, and a deterministic executor. Discovery runs a constrained observe–decide–act loop against the live iframe, validates every proposed action, and compiles only a verified trace. Production replay consumes the compiled artifact without calling a model.
 
-The target is intentionally local and synthetic. It exercises lookup, asynchronous loading, extraction, and a legitimate not-found outcome without touching a real institution or persisting financial data.
+The server provider uses the OpenAI Responses API with strict structured output and `store: false`. If no API key is configured, the client labels and uses a policy-equivalent simulator; other provider failures remain visible instead of silently becoming simulated success. The target and member data are local and synthetic.
 
 ## Artifact schema
 
-Each artifact declares identity and semantic version, target application and surface, typed inputs and outputs, risk policy, ordered steps, robust locator candidates, recognized business outcomes, and a final checkpoint. Inputs can be marked sensitive so evidence names the parameter but never records its value. At least two locators are required for every control target to make fallback intent reviewable.
+Artifacts declare identity and semantic version, target surface, typed inputs and outputs, risk policy, ordered actions, two locator candidates per target, recognized business outcomes, and a final checkpoint. Discovery metadata records the provider and generation time, but the model transcript is discarded. Sensitive invocation values never enter the artifact or provider prompt.
 
-The artifact stores reusable execution intent rather than a raw model transcript. Discovery will compile into this contract; production replay consumes it without model decisions.
+Compilation accepts only the complete five-action savings lookup trace. This prevents a plausible but incomplete model response from becoming executable automation.
 
 ## Determinism & error handling
 
-Replay validates the artifact and invocation before touching the target. It checks the path allowlist before session start and after every step, enforces action and step limits, applies step and run timeouts, extracts every declared output, and verifies the final checkpoint.
+Discovery and replay validate their contracts before acting. Both enforce the same-origin `/legacy` allowlist, action and step limits, timeouts, output requirements, known business outcomes, and checkpoint verification. Provider decisions are rejected when they reference hidden or unknown controls, undeclared inputs or outputs, or arbitrary selectors.
 
-Results separate success, known business outcomes, and failures. Failures include category, code, step, message, and retryability. The current adapter uses ordered locator fallbacks. Missing locators, outputs, or checkpoints are hard failures; timeouts are recoverable; unsafe navigation and disallowed actions are policy denials.
+Results distinguish success, business outcome, recoverable failure, policy denial, and hard failure. Replay uses ordered locator fallbacks and records the locator that succeeded. `member_not_found` exits as a valid business outcome rather than a system error.
 
 ## Heterogeneity & multi-tenant
 
-The `SurfaceAdapter` boundary is the extension seam. A legacy-web adapter can replace DOM queries with accessibility-tree or visual matching, and a desktop adapter can map the same action/target contract to OS-level controls. Future locator variants should carry surface-specific strategies without changing the executor result contract.
-
-For multi-tenant reuse, the capability should be owned by vendor product and version, with institution-specific target configuration and small locator overrides. Replay evidence can track locator success rates and checkpoint failures to detect drift before specializing or re-recording an artifact.
+`DiscoveryAdapter` and `SurfaceAdapter` isolate surface mechanics from planning and execution. A desktop or accessibility-tree adapter can implement the same contracts without changing artifacts or result handling. Tenant reuse should key capabilities by vendor product and version, with institution-specific configuration and small reviewed locator overrides.
 
 ## Escalation & handoff
 
-Human takeover is the next major capability after discovery. The executor already preserves a live adapter session and returns an exact failure step with evidence. The next control model will add `automation`, `human_requested`, `human`, and `resuming` ownership states around the same session, record manual actions, and require an explicit resume signal.
+The next phase adds `automation`, `human_requested`, `human`, and `resuming` ownership states around the existing live session. Evidence already identifies the exact failing phase or replay step, which provides a clean handoff point. Resume must be explicit and must revalidate the current target and checkpoint.
 
 ## Safety
 
-The current capability is read-only. Runtime checks enforce same-origin route prefixes, action allowlists, maximum steps, total timeout, and input shape. Sensitive parameter values are redacted from evidence. Irreversible capabilities are rejected unless their policy requires human approval.
+The capability is read-only. Runtime policy enforces target path, action allowlist, step budget, total timeout, input shape, declared extraction fields, and final checkpoint. Sensitive values stay in the browser adapter and are replaced with placeholders before provider calls and evidence recording. Provider responses cannot supply selectors directly.
 
-This is not yet a complete production security boundary: hosted authentication, encrypted evidence storage, secret injection, operator authorization, and tamper-resistant artifact approval are deliberately outside this milestone.
+This remains a demonstration boundary: hosted authentication, encrypted persistent evidence, operator authorization, secret injection, and tamper-resistant artifact approval belong in the next production-hardening phase.
 
 ## Cuts
 
-This phase finishes the deterministic foundation. It does not yet include live LLM discovery, automatic artifact compilation, persisted evidence files, failure screenshots, injected session/permission errors, or human takeover. The next phase is goal-driven discovery and artifact generation; after that, add persistent evidence and same-session human handoff before broader polish or stretch goals.
+Phase 2 completes goal-driven discovery, structured provider integration, automatic compilation, artifact inspection/download, and immediate deterministic replay. Redacted example evidence is checked in, while durable run storage, screenshots, session/permission fault injection, and human takeover are deferred. Live model execution requires a configured server-side API key; the safe simulator keeps the project runnable without one.

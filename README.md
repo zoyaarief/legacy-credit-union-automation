@@ -1,17 +1,19 @@
 # Legacy Credit Union Computer-Use Automation
 
-The current milestone provides a clean deterministic-replay foundation against a local, legacy-style member-servicing UI. It intentionally keeps synthetic financial data local and separates the capability contract, execution policy, and surface adapter.
+Phase 2 adds goal-driven discovery to the deterministic replay foundation. A constrained provider observes the synthetic legacy portal, proposes one allowlisted action at a time, and compiles a successful trace into a typed capability artifact. Replay then runs that artifact without model decisions.
 
 ## What works
 
-- Legacy credit-union target with synthetic member records
-- Typed, versioned capability with inputs, outputs, ordered actions, fallback locators, outcomes, and checkpoint
-- Reusable executor with runtime artifact and input validation
-- Same-origin and route allowlist enforcement before and during replay
-- Explicit success, business-outcome, recoverable, policy-denied, and hard-failure contracts
-- Redacted structured evidence events
-- Browser adapter isolated from the executor core
-- Unit coverage for success, not-found, invalid input, policy denial, and checkpoint failure
+- Goal form and live legacy-credit-union target session
+- Observe–decide–act discovery with an eight-step and 20-second policy budget
+- Optional OpenAI Responses API provider using structured JSON and `store: false`
+- Explicit safe-simulator fallback when no API key is configured
+- Strict action, target, input, output, route, and sensitive-value validation
+- Automatic compilation into the versioned capability schema
+- Generated-artifact review, JSON download, and immediate deterministic replay
+- Known `member_not_found` business outcome and final checkpoint verification
+- Redacted discovery and replay evidence; model transcripts are discarded
+- Unit coverage for replay, discovery, model-boundary validation, and fallback behavior
 
 ## Run locally
 
@@ -19,16 +21,19 @@ Requires Node.js 22.13+ and pnpm.
 
 ```bash
 pnpm install
+cp .env.example .env.local
 pnpm run dev
 ```
 
+`OPENAI_API_KEY` is optional. Without it, discovery uses the labeled safe simulator and the complete discovery-to-replay flow still works locally. Never commit `.env.local`.
+
 Open `http://localhost:3000`.
 
-- Use member `12345`, `24680`, or `31415` for success.
-- Use member `00000` for the `member_not_found` business outcome.
+- Discover with member `12345`, then replay the generated artifact.
+- Use member `00000` to verify the `member_not_found` outcome.
 - Open `/legacy` to operate the target manually.
 
-## Verify the base
+## Verify
 
 ```bash
 pnpm test
@@ -39,13 +44,16 @@ pnpm run build
 
 ## Project map
 
-- `app/page.tsx` — replay console and browser-surface adapter
+- `app/page.tsx` — discovery/replay console and browser adapters
+- `app/api/discovery/decide/route.ts` — server-only discovery provider boundary
 - `app/legacy/page.tsx` — synthetic legacy credit-union application
-- `lib/automation/core.ts` — artifact validation, guardrails, executor, result and evidence contracts
-- `capabilities/get-savings-balance.v1.json` — versioned capability artifact
-- `tests/` — artifact and executor tests
-- `REPORT.md` — design decisions, trade-offs, and cut line
+- `lib/discovery/` — discovery engine, provider validation, and OpenAI adapter
+- `lib/automation/core.ts` — deterministic executor and evidence contracts
+- `capabilities/` — reviewed capability artifacts
+- `evidence/` — redacted example run evidence
+- `tests/` — replay and discovery tests
+- `REPORT.md` — design decisions and phase cut line
 
 ## Next phase
 
-Add the goal-driven discovery path: accept a goal and target, drive the same surface through an observe-decide-act provider boundary, compile successful actions into this capability schema, and save discovery evidence. The deterministic executor remains the production path and must not call the model.
+Persist evidence and artifacts behind an authenticated store, then add explicit same-session human takeover and resume states. Deterministic replay remains the production execution path.

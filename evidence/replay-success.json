@@ -1,0 +1,13 @@
+{
+  "schemaVersion": "1.0",
+  "scenario": "generated artifact deterministic replay",
+  "status": "success",
+  "artifact": "get_savings_balance@1.0.0",
+  "sensitiveValuesStored": false,
+  "outputs": {
+    "balance": "$2,458.17",
+    "accountStatus": "Active"
+  },
+  "checkpoint": "verified",
+  "eventCount": 7
+}
