@@ -1,0 +1,120 @@
+{
+  "schemaVersion": "1.0",
+  "name": "get_savings_balance",
+  "version": "1.1.0",
+  "description": "Find a credit-union member and return the current regular-savings balance and account status.",
+  "target": {
+    "surface": "web",
+    "application": "northstar-core-member-services",
+    "entryPoint": "/legacy",
+    "allowlist": { "sameOrigin": true, "pathPrefixes": ["/legacy"] }
+  },
+  "inputs": {
+    "memberId": { "type": "string", "required": true, "pattern": "^[0-9]{5}$", "sensitive": true }
+  },
+  "outputs": {
+    "balance": { "type": "currency", "currency": "USD" },
+    "accountStatus": { "type": "string" }
+  },
+  "policy": {
+    "allowedActions": ["type", "click", "wait_for_outcome", "extract"],
+    "risk": "read_only",
+    "maxSteps": 8,
+    "runTimeoutMs": 15000,
+    "requiresHumanApproval": false
+  },
+  "steps": [
+    {
+      "id": "enter_member_id",
+      "action": "type",
+      "input": "memberId",
+      "target": {
+        "description": "Member Number input",
+        "locators": [
+          { "kind": "name", "value": "member_number" },
+          { "kind": "css", "value": "input[maxlength='5']" }
+        ]
+      }
+    },
+    {
+      "id": "submit_member_lookup",
+      "action": "click",
+      "target": {
+        "description": "Retrieve Record button",
+        "locators": [
+          { "kind": "button_text", "value": "Retrieve Record" },
+          { "kind": "css", "value": "form button[type='submit']" }
+        ]
+      }
+    },
+    {
+      "id": "wait_for_member_outcome",
+      "action": "wait_for_outcome",
+      "timeoutMs": 4000,
+      "outcomes": [
+        {
+          "kind": "success",
+          "target": {
+            "description": "Member summary panel",
+            "locators": [
+              { "kind": "css", "value": "#member-summary" },
+              { "kind": "css", "value": ".member-result" }
+            ]
+          }
+        },
+        {
+          "kind": "business_outcome",
+          "code": "member_not_found",
+          "target": {
+            "description": "Member not found message",
+            "locators": [
+              { "kind": "css", "value": "#not-found" },
+              { "kind": "css", "value": ".legacy-message" }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "extract_savings_balance",
+      "action": "extract",
+      "output": "balance",
+      "target": {
+        "description": "Regular savings current balance cell",
+        "locators": [
+          { "kind": "css", "value": ".accounts-grid tbody tr .savings-balance" },
+          { "kind": "css", "value": "#member-summary .money" }
+        ]
+      }
+    },
+    {
+      "id": "extract_account_status",
+      "action": "extract",
+      "output": "accountStatus",
+      "target": {
+        "description": "Regular savings status cell",
+        "locators": [
+          { "kind": "css", "value": ".accounts-grid tbody tr .account-status" },
+          { "kind": "css", "value": "#member-summary .accounts-grid td:nth-child(4)" }
+        ]
+      }
+    }
+  ],
+  "checkpoint": {
+    "kind": "element_visible",
+    "target": {
+      "description": "Member summary panel",
+      "locators": [
+        { "kind": "css", "value": "#member-summary" },
+        { "kind": "css", "value": ".member-result" }
+      ]
+    }
+  },
+  "businessOutcomes": [
+    {
+      "code": "member_not_found",
+      "message": "No member matched the supplied identifier.",
+      "retryable": false
+    }
+  ]
+}
