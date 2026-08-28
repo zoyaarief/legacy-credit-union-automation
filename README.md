@@ -1,6 +1,6 @@
 # Legacy Credit Union Computer-Use Automation
 
-Phase 2 adds goal-driven discovery to the deterministic replay foundation. A constrained provider observes the synthetic legacy portal, proposes one allowlisted action at a time, and compiles a successful trace into a typed capability artifact. Replay then runs that artifact without model decisions.
+Phase 3 completes the required end-to-end vertical slice: goal-driven discovery, typed artifact compilation, deterministic replay, durable redacted evidence, and a same-session human handoff that can resume the paused run.
 
 ## What works
 
@@ -13,7 +13,11 @@ Phase 2 adds goal-driven discovery to the deterministic replay foundation. A con
 - Generated-artifact review, JSON download, and immediate deterministic replay
 - Known `member_not_found` business outcome and final checkpoint verification
 - Redacted discovery and replay evidence; model transcripts are discarded
-- Unit coverage for replay, discovery, model-boundary validation, and fallback behavior
+- Explicit `automation → human_requested → human → resuming → completed` ownership model
+- Restricted-account intervention with a redacted surface snapshot
+- Human action capture without field values and deterministic same-session resume
+- Per-user D1 run history with restorable capability artifacts
+- Unit coverage for replay, discovery, model validation, storage sanitization, and handoff transitions
 
 ## Run locally
 
@@ -31,6 +35,7 @@ Open `http://localhost:3000`.
 
 - Discover with member `12345`, then replay the generated artifact.
 - Use member `00000` to verify the `member_not_found` outcome.
+- Open **Human handoff**, start the assisted replay, accept control, click **Continue lookup** inside the live target, then resume automation.
 - Open `/legacy` to operate the target manually.
 
 ## Verify
@@ -44,11 +49,14 @@ pnpm run build
 
 ## Project map
 
-- `app/page.tsx` — discovery/replay console and browser adapters
+- `app/page.tsx` — discovery, replay, handoff console, and browser adapters
 - `app/api/discovery/decide/route.ts` — server-only discovery provider boundary
+- `app/api/runs/route.ts` — authenticated durable run and artifact history
 - `app/legacy/page.tsx` — synthetic legacy credit-union application
+- `db/` and `drizzle/` — D1 schema, access helper, and migration
 - `lib/discovery/` — discovery engine, provider validation, and OpenAI adapter
-- `lib/automation/core.ts` — deterministic executor and evidence contracts
+- `lib/automation/core.ts` — pausable deterministic executor and evidence contracts
+- `lib/handoff/` — control-transfer state machine
 - `capabilities/` — reviewed capability artifacts
 - `evidence/` — redacted example run evidence
 - `tests/` — replay and discovery tests
@@ -56,4 +64,4 @@ pnpm run build
 
 ## Next phase
 
-Persist evidence and artifacts behind an authenticated store, then add explicit same-session human takeover and resume states. Deterministic replay remains the production execution path.
+Production hardening: artifact approval states, encrypted evidence retention, role-based operator authorization, and injected session/permission/timeout fault coverage. Deterministic replay remains the production execution path.

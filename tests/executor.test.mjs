@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { executeCapability } from "../lib/automation/core.ts";
+import { executeCapability, HumanInterventionError } from "../lib/automation/core.ts";
 
 const artifactUrl = new URL("../capabilities/get-savings-balance.v1.json", import.meta.url);
 const artifact = JSON.parse(await readFile(artifactUrl, "utf8"));
@@ -83,4 +83,41 @@ test("executor reports a missing checkpoint as a hard failure", async () => {
   assert.equal(result.status, "failure");
   assert.equal(result.error.code, "checkpoint_failed");
   assert.equal(result.error.stepId, "checkpoint");
+});
+
+test("executor pauses for a human and resumes the same prepared session", async () => {
+  let prepared = 0;
+  let blocked = true;
+  const liveAdapter = adapter({
+    prepare: async () => { prepared += 1; },
+    waitForOutcome: async (outcomes) => {
+      if (blocked) {
+        throw new HumanInterventionError(
+          "operator_acknowledgment_required",
+          "Operator acknowledgment required.",
+          { surface: "web", path: "/legacy", title: "Northstar", visibleSignals: ["permission_dialog"] },
+        );
+      }
+      return outcomes.find((outcome) => outcome.kind === "success");
+    },
+  });
+  const paused = await executeCapability({ artifact, inputs: { memberId: "31415" }, adapter: liveAdapter, ...fixed });
+  assert.equal(paused.status, "human_required");
+  assert.equal(paused.intervention.stepId, "wait_for_member_outcome");
+  assert.equal(prepared, 1);
+
+  blocked = false;
+  const resumed = await executeCapability({
+    artifact,
+    inputs: { memberId: "31415" },
+    adapter: liveAdapter,
+    resume: paused.resume,
+    humanActions: [{ at: fixed.now(), kind: "click", control: "Continue lookup" }],
+    ...fixed,
+  });
+  assert.equal(resumed.status, "success");
+  assert.equal(prepared, 1);
+  assert.ok(resumed.evidence.some((event) => event.action === "human_action"));
+  assert.ok(resumed.evidence.some((event) => event.action === "resume"));
+  assert.equal(JSON.stringify(resumed.evidence).includes("31415"), false);
 });

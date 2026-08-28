@@ -59,9 +59,29 @@ export type EvidenceEvent = {
   sequence: number;
   at: string;
   stepId: string;
-  action: "policy_check" | "checkpoint" | CapabilityStep["action"];
-  outcome: "ok" | "business_outcome" | "error";
+  action: "policy_check" | "checkpoint" | "handoff" | "human_action" | "resume" | CapabilityStep["action"];
+  outcome: "ok" | "business_outcome" | "intervention" | "error";
   detail: string;
+};
+
+export type SurfaceSnapshot = {
+  surface: "web";
+  path: string;
+  title: string;
+  visibleSignals: string[];
+};
+
+export type HumanAction = {
+  at: string;
+  kind: "click" | "input";
+  control: string;
+};
+
+export type ReplayResume = {
+  runId: string;
+  stepIndex: number;
+  outputs: Record<string, string>;
+  evidence: EvidenceEvent[];
 };
 
 export type FailureCategory = "invalid_request" | "policy_denied" | "recoverable" | "hard_failure";
@@ -69,6 +89,13 @@ export type FailureCategory = "invalid_request" | "policy_denied" | "recoverable
 export type ReplayResult =
   | { runId: string; status: "success"; outputs: Record<string, string>; evidence: EvidenceEvent[] }
   | { runId: string; status: "business_outcome"; code: string; message: string; retryable: boolean; evidence: EvidenceEvent[] }
+  | {
+      runId: string;
+      status: "human_required";
+      intervention: { code: string; message: string; stepId: string; snapshot: SurfaceSnapshot };
+      resume: ReplayResume;
+      evidence: EvidenceEvent[];
+    }
   | {
       runId: string;
       status: "failure";
@@ -97,6 +124,18 @@ export class AutomationError extends Error {
     this.code = code;
     this.category = category;
     this.retryable = retryable;
+  }
+}
+
+export class HumanInterventionError extends Error {
+  readonly code: string;
+  readonly snapshot: SurfaceSnapshot;
+
+  constructor(code: string, message: string, snapshot: SurfaceSnapshot) {
+    super(message);
+    this.name = "HumanInterventionError";
+    this.code = code;
+    this.snapshot = snapshot;
   }
 }
 
@@ -227,11 +266,15 @@ export async function executeCapability(options: {
   runId?: string;
   now?: () => string;
   onEvidence?: (event: EvidenceEvent) => void;
+  resume?: ReplayResume;
+  humanActions?: HumanAction[];
 }): Promise<ReplayResult> {
-  const runId = options.runId ?? crypto.randomUUID();
+  const runId = options.resume?.runId ?? options.runId ?? crypto.randomUUID();
   const now = options.now ?? (() => new Date().toISOString());
-  const evidence: EvidenceEvent[] = [];
+  const evidence: EvidenceEvent[] = options.resume ? [...options.resume.evidence] : [];
   let activeStep = "initialize";
+  let activeStepIndex = options.resume?.stepIndex ?? 0;
+  let resumeOutputs: Record<string, string> = { ...(options.resume?.outputs ?? {}) };
 
   const record = (event: Omit<EvidenceEvent, "sequence" | "at">) => {
     const complete = { ...event, sequence: evidence.length + 1, at: now() };
@@ -248,16 +291,25 @@ export async function executeCapability(options: {
     if (capability.policy.risk === "irreversible" && !capability.policy.requiresHumanApproval) {
       throw new AutomationError("approval_required", "policy_denied", "Irreversible capabilities must require human approval.");
     }
-    record({ stepId: "policy", action: "policy_check", outcome: "ok", detail: "Artifact, inputs, action allowlist, risk policy, and target path approved." });
+    if (!options.resume) {
+      record({ stepId: "policy", action: "policy_check", outcome: "ok", detail: "Artifact, inputs, action allowlist, risk policy, and target path approved." });
+    } else {
+      for (const action of options.humanActions ?? []) {
+        record({ stepId: "handoff", action: "human_action", outcome: "ok", detail: `Human ${action.kind} on ${action.control}; values were not recorded.` });
+      }
+      record({ stepId: capability.steps[activeStepIndex]?.id ?? "checkpoint", action: "resume", outcome: "ok", detail: "Human returned control; target policy and live-session context revalidated." });
+    }
 
     const startedAt = Date.now();
-    await options.adapter.prepare(capability.target.entryPoint);
+    if (!options.resume) await options.adapter.prepare(capability.target.entryPoint);
     if (!isAllowedTargetUrl(options.adapter.currentUrl(), options.origin, capability)) {
       throw new AutomationError("policy_denied", "policy_denied", "Live surface navigated outside the target allowlist.");
     }
 
-    const outputs: Record<string, string> = {};
-    for (const step of capability.steps) {
+    const outputs = resumeOutputs;
+    for (let stepIndex = activeStepIndex; stepIndex < capability.steps.length; stepIndex += 1) {
+      activeStepIndex = stepIndex;
+      const step = capability.steps[stepIndex];
       activeStep = step.id;
       if (Date.now() - startedAt > capability.policy.runTimeoutMs) {
         throw new AutomationError("run_timeout", "recoverable", "Capability exceeded its run timeout.", true);
@@ -286,6 +338,7 @@ export async function executeCapability(options: {
         const value = await options.adapter.extract(step.target);
         if (!value) throw new AutomationError("output_missing", "hard_failure", `Declared output ${step.output} was empty.`);
         outputs[step.output] = value;
+        resumeOutputs = outputs;
         record({ stepId: step.id, action: step.action, outcome: "ok", detail: `Extracted declared ${step.output} output.` });
       }
 
@@ -304,6 +357,16 @@ export async function executeCapability(options: {
     record({ stepId: "checkpoint", action: "checkpoint", outcome: "ok", detail: "Success checkpoint verified and all declared outputs returned." });
     return { runId, status: "success", outputs, evidence };
   } catch (error) {
+    if (error instanceof HumanInterventionError) {
+      record({ stepId: activeStep, action: "handoff", outcome: "intervention", detail: error.message });
+      return {
+        runId,
+        status: "human_required",
+        intervention: { code: error.code, message: error.message, stepId: activeStep, snapshot: error.snapshot },
+        resume: { runId, stepIndex: activeStepIndex, outputs: resumeOutputs, evidence },
+        evidence,
+      };
+    }
     const automationError = error instanceof AutomationError
       ? error
       : new AutomationError("unexpected_error", "hard_failure", error instanceof Error ? error.message : "Unknown replay error.");

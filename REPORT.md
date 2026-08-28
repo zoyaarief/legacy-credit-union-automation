@@ -2,7 +2,7 @@
 
 ## Architecture
 
-The system now has four seams: a goal-driven discovery engine, a provider boundary, a versioned capability contract, and a deterministic executor. Discovery runs a constrained observe–decide–act loop against the live iframe, validates every proposed action, and compiles only a verified trace. Production replay consumes the compiled artifact without calling a model.
+The system has six seams: a goal-driven discovery engine, a provider boundary, a versioned capability contract, a pausable deterministic executor, a control-transfer state machine, and per-user durable run storage. Discovery compiles only a verified trace. Replay consumes that artifact without a model. D1 stores sanitized artifacts, outcomes, surface snapshots, and evidence behind the authenticated Sites user id.
 
 The server provider uses the OpenAI Responses API with strict structured output and `store: false`. If no API key is configured, the client labels and uses a policy-equivalent simulator; other provider failures remain visible instead of silently becoming simulated success. The target and member data are local and synthetic.
 
@@ -16,7 +16,7 @@ Compilation accepts only the complete five-action savings lookup trace. This pre
 
 Discovery and replay validate their contracts before acting. Both enforce the same-origin `/legacy` allowlist, action and step limits, timeouts, output requirements, known business outcomes, and checkpoint verification. Provider decisions are rejected when they reference hidden or unknown controls, undeclared inputs or outputs, or arbitrary selectors.
 
-Results distinguish success, business outcome, recoverable failure, policy denial, and hard failure. Replay uses ordered locator fallbacks and records the locator that succeeded. `member_not_found` exits as a valid business outcome rather than a system error.
+Results distinguish success, business outcome, human-required intervention, recoverable failure, policy denial, and hard failure. Replay uses ordered locator fallbacks and records the locator that succeeded. `member_not_found` exits as a valid business outcome. An operator-only interstitial returns a resume cursor rather than becoming a crash or being bypassed.
 
 ## Heterogeneity & multi-tenant
 
@@ -24,14 +24,16 @@ Results distinguish success, business outcome, recoverable failure, policy denia
 
 ## Escalation & handoff
 
-The next phase adds `automation`, `human_requested`, `human`, and `resuming` ownership states around the existing live session. Evidence already identifies the exact failing phase or replay step, which provides a clean handoff point. Resume must be explicit and must revalidate the current target and checkpoint.
+The implemented ownership states are `automation`, `human_requested`, `human`, `resuming`, and `completed`. A restricted-account interstitial raises an intervention containing the capability, exact stopped step, reason, and a redacted structured surface snapshot. The executor pauses before the blocked action and preserves its cursor and iframe.
+
+After an operator accepts, the existing iframe becomes the manual control surface. Click and input events are captured by control name only; values are never recorded. Resume is explicit, skips session preparation, revalidates the current URL, continues from the stopped wait step, and verifies the original outputs and checkpoint. The complete evidence sequence is stored under the same run id.
 
 ## Safety
 
 The capability is read-only. Runtime policy enforces target path, action allowlist, step budget, total timeout, input shape, declared extraction fields, and final checkpoint. Sensitive values stay in the browser adapter and are replaced with placeholders before provider calls and evidence recording. Provider responses cannot supply selectors directly.
 
-This remains a demonstration boundary: hosted authentication, encrypted persistent evidence, operator authorization, secret injection, and tamper-resistant artifact approval belong in the next production-hardening phase.
+The private Site supplies the stable authenticated user id used for record ownership. Local development receives an isolated demo owner only on localhost. This remains a demonstration boundary: encryption policy, operator roles, retention/deletion controls, secret injection, and tamper-resistant artifact approval belong in production hardening.
 
 ## Cuts
 
-Phase 2 completes goal-driven discovery, structured provider integration, automatic compilation, artifact inspection/download, and immediate deterministic replay. Redacted example evidence is checked in, while durable run storage, screenshots, session/permission fault injection, and human takeover are deferred. Live model execution requires a configured server-side API key; the safe simulator keeps the project runnable without one.
+Phase 3 completes the required human-escalation path and durable evidence/artifact history. The richer failure signal is a redacted structured surface snapshot rather than a screenshot to avoid capturing regulated values. Role-based operator queues, encrypted retention, artifact approval scoring, broad fault injection, and cross-device continuation are deliberately deferred. Live model execution still requires a configured server-side API key; the safe simulator keeps the core runnable without one.

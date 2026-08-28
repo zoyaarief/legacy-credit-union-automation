@@ -14,12 +14,21 @@ export default function LegacyPortal() {
   const [member,setMember] = useState<Member|null>(null);
   const [searched,setSearched] = useState(false);
   const [loading,setLoading] = useState(false);
+  const [permissionPending,setPermissionPending] = useState(false);
 
   function search(event:FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const submittedMemberNumber = String(new FormData(event.currentTarget).get("member_number") ?? "");
-    setMemberNumber(submittedMemberNumber); setLoading(true); setSearched(false); setMember(null);
-    window.setTimeout(() => { setMember(MEMBERS[submittedMemberNumber] || null); setSearched(true); setLoading(false); },650);
+    setMemberNumber(submittedMemberNumber); setLoading(true); setSearched(false); setMember(null); setPermissionPending(false);
+    window.setTimeout(() => {
+      if (submittedMemberNumber === "31415") { setPermissionPending(true); setLoading(false); return; }
+      setMember(MEMBERS[submittedMemberNumber] || null); setSearched(true); setLoading(false);
+    },650);
+  }
+
+  function approveRestrictedLookup() {
+    setPermissionPending(false); setLoading(true);
+    window.setTimeout(() => { setMember(MEMBERS["31415"]); setSearched(true); setLoading(false); },350);
   }
 
   return <main className="legacy-shell">
@@ -34,9 +43,14 @@ export default function LegacyPortal() {
             <tr><th>Member Number:</th><td><input name="member_number" value={memberNumber} onChange={(event)=>setMemberNumber(event.target.value.replace(/\D/g,"").slice(0,5))} maxLength={5} autoComplete="off" /></td></tr>
             <tr><th>Inquiry Type:</th><td><select name="inquiry_type" defaultValue="summary"><option value="summary">Member / Account Summary</option><option value="shares">Share Accounts Only</option></select></td></tr>
           </tbody></table>
-          <div className="legacy-actions"><button type="submit" disabled={loading}>{loading?"PLEASE WAIT...":"Retrieve Record"}</button><button type="button" onClick={()=>{setMemberNumber("");setMember(null);setSearched(false)}}>Clear</button></div>
+          <div className="legacy-actions"><button type="submit" disabled={loading}>{loading?"PLEASE WAIT...":"Retrieve Record"}</button><button type="button" onClick={()=>{setMemberNumber("");setMember(null);setSearched(false);setPermissionPending(false)}}>Clear</button></div>
         </form>
       </div>
+      {permissionPending && <div id="permission-dialog" className="legacy-dialog" role="dialog" aria-labelledby="permission-title">
+        <div id="permission-title" className="legacy-dialog-title">ADDITIONAL AUTHORIZATION REQUIRED</div>
+        <p>This restricted account requires an operator acknowledgment before the inquiry can continue.</p>
+        <div className="legacy-actions"><button type="button" onClick={approveRestrictedLookup}>Continue lookup</button></div>
+      </div>}
       {searched && !member && <div id="not-found" className="legacy-message"><strong>MESSAGE 104:</strong> MEMBER NUMBER NOT FOUND. VERIFY NUMBER AND RETRY.</div>}
       {member && <div id="member-summary" className="legacy-window member-result">
         <div className="legacy-window-title">Member / Account Summary</div>
