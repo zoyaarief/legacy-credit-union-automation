@@ -1,6 +1,6 @@
 # Legacy Credit Union Computer-Use Automation
 
-Phase 8 adds an encrypted durable job queue, leased browser workers, cross-device intervention rehydration, and policy-derived operational alerts.
+Phase 9 adds server-enforced administrator, reviewer, and operator roles plus a protected recovery tick and signed, retrying webhook alert delivery.
 
 ## What works
 
@@ -31,6 +31,10 @@ Phase 8 adds an encrypted durable job queue, leased browser workers, cross-devic
 - Owner-scoped asynchronous jobs with encrypted inputs and three-minute worker leases
 - Durable `human_required` jobs that can be rehydrated on another signed-in device
 - Five alert policies covering success rate, ticket rejection, backlog, waiting intervention, and key rotation
+- Server-enforced administrator, reviewer, operator, agent, and viewer capabilities
+- Reviewer-only artifact approval and operator-only durable job execution
+- Protected scheduler tick for expired-lease recovery and alert-outbox dispatch
+- HMAC-SHA-256 webhook delivery with deduplication and exponential retry
 - Unit coverage for replay, recovery, encryption, discovery, model validation, storage policy, artifact fingerprints, fault classification, and handoff transitions
 
 ## Run locally
@@ -48,6 +52,8 @@ pnpm run dev
 `EVIDENCE_ENCRYPTION_KEY` is optional only on localhost and must be a base64-encoded 32-byte key. Hosted production requires it; `EVIDENCE_KEY_VERSION` identifies the active key version.
 
 `INVOCATION_SIGNING_KEY` is required for agent tickets and must be a separate base64-encoded 32-byte key. During evidence rotation, configure the previous key and version, deploy the new current key, then use the Operations control to re-encrypt remaining rows before removing the previous key.
+
+`AUTOMATION_ADMIN_USER_IDS` bootstraps trusted administrators. `SCHEDULER_SECRET` protects machine-triggered control ticks. Configure both `ALERT_WEBHOOK_URL` and `ALERT_WEBHOOK_SECRET` to enable external delivery; without them, alerts remain safely queued.
 
 Open `http://localhost:3000`.
 
@@ -75,6 +81,8 @@ pnpm run build
 - `app/api/capabilities/route.ts` — authenticated catalog and typed invocation-ticket API
 - `app/api/operations/route.ts` — owner-scoped telemetry and bounded evidence-key rotation
 - `app/api/jobs/route.ts` — encrypted durable jobs, leasing, claiming, completion, and cancellation
+- `app/api/roles/route.ts` — authenticated role resolution and administrator-managed assignments
+- `app/api/scheduler/route.ts` — lease recovery and signed retrying alert dispatch
 - `app/api/discovery/decide/route.ts` — server-only discovery provider boundary
 - `app/api/runs/route.ts` — authenticated durable history, expiry, integrity hashes, and deletion
 - `app/api/artifacts/route.ts` — owner-scoped exact-artifact review and approval
@@ -86,6 +94,8 @@ pnpm run build
 - `lib/automation/stability.ts` — multi-run stability scoring
 - `lib/operations/` — durable rate limits, telemetry events, and health summaries
 - `lib/security/invocation.ts` — owner-bound HMAC ticket signing and verification
+- `lib/auth/roles.ts` — server-side role capabilities and authorization policy
+- `lib/alerts/delivery.ts` — exact-body webhook signing and delivery
 - `lib/jobs/core.ts` — durable job contracts
 - `lib/handoff/` — control-transfer state machine
 - `capabilities/` — reviewed capability artifacts
@@ -95,4 +105,4 @@ pnpm run build
 
 ## Next phase
 
-Phase 9: external alert delivery, scheduled unattended workers, and real multi-principal reviewer/operator roles.
+Phase 10: connect a production webhook and scheduler provider, grant additional Site users, and add multi-party approval workflows.

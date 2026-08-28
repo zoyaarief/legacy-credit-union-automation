@@ -46,14 +46,20 @@ The runtime accepts a current and previous evidence key. Reads resolve the secre
 
 Operational events contain no invocation values. Ticket issue, verification, rejection, limiting, agent-run storage, and evidence rotation are owner-scoped in D1. The console summarizes the last 24 hours, including success and recovery rates, and exposes current key-version posture. Telemetry failures never change the automation contract result.
 
+## Governed operations & alert delivery
+
+Authorization is resolved on the server from the authenticated Site principal. Administrators can assign reviewer, operator, agent, and viewer roles in D1. Artifact approval requires reviewer authority, while durable job claiming and completion require operator authority. The configured owner id is bootstrapped as administrator so existing single-owner operation remains available.
+
+A protected control tick requeues expired job leases, deduplicates waiting-intervention alerts into a durable outbox, and drains due entries in bounded batches. Webhook requests sign the exact JSON body with HMAC-SHA-256. Delivery failures retain the alert and apply exponential backoff up to one hour. External delivery remains dormant when a destination is not configured.
+
 ## Durable jobs & cross-device recovery
 
 Jobs persist encrypted typed inputs, canonical artifact identity, status, lease, and redacted result metadata in D1. A browser worker claims a job for three minutes, receives a fresh signed ticket, verifies it through the existing catalog boundary, and uses the same deterministic executor. Expired leases are reclaimable.
 
 `human_required` is a durable job status. Another signed-in device can claim it, decrypt its inputs server-side, and deterministically rehydrate the target to the intervention checkpoint before handing control to the operator. The browser session itself is not transferred across devices; the safe read-only path is replayed and revalidated.
 
-Operational alerts are derived from stored state rather than client counters: low success rate, elevated ticket rejection, queue backlog, waiting intervention, and pending key rotation. Alerts remain in-product; external delivery is deferred.
+Operational alerts are derived from stored state rather than client counters: low success rate, elevated ticket rejection, queue backlog, waiting intervention, and pending key rotation. Waiting-intervention alerts enter the signed external-delivery outbox; other alerts remain visible in-product.
 
 ## Cuts
 
-Phase 8 completes encrypted durable jobs, lease recovery, cross-device intervention rehydration, and in-product alert thresholds. The private demo has one authenticated owner, so separate reviewer/operator identities and multi-party approval are not fabricated in client state. External alert delivery, scheduled unattended browser workers, broader network faults, and real multi-principal authorization remain deliberate cuts.
+Phase 9 completes server-enforced roles, lease-recovery control ticks, and a durable signed webhook outbox. The private demo still has one granted Site owner, and no external webhook or platform scheduler destination was provided, so those integrations are intentionally configuration-gated. Multi-party approval, fully unattended browser execution, and broader network faults remain deliberate cuts.

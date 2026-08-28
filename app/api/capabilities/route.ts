@@ -6,6 +6,7 @@ import { listCapabilityCatalog, resolveCapabilityVariant, validateInvocationInpu
 import { capabilityFingerprint } from "@/lib/persistence/contracts";
 import { consumeInvocationQuota, recordOperationalEvent } from "@/lib/operations/store";
 import { signInvocation, verifyInvocation, type InvocationSignatureClaims } from "@/lib/security/invocation";
+import { can, configuredAdmins, resolveRole } from "@/lib/auth/roles";
 
 export const dynamic = "force-dynamic";
 const TICKET_TTL_MS = 120_000;
@@ -20,6 +21,11 @@ function ownerId(request: Request): string | null {
 function signingSecret() {
   const workerEnv = env as unknown as { INVOCATION_SIGNING_KEY?: string };
   return workerEnv.INVOCATION_SIGNING_KEY ?? process.env.INVOCATION_SIGNING_KEY;
+}
+
+function adminIds() {
+  const workerEnv = env as unknown as { AUTOMATION_ADMIN_USER_IDS?: string };
+  return configuredAdmins(workerEnv.AUTOMATION_ADMIN_USER_IDS ?? process.env.AUTOMATION_ADMIN_USER_IDS);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -74,6 +80,7 @@ export async function POST(request: Request) {
     const body = await request.json() as { capabilityName?: string; version?: string; variantId?: string; inputs?: unknown };
     database = getD1();
     await ensureRunStore(database);
+    if (!can(await resolveRole(database, owner, adminIds()), "invoke_capabilities")) return Response.json({ error: "forbidden" }, { status: 403 });
     const quota = await consumeInvocationQuota(database, owner, startedAt);
     if (!quota.allowed) {
       await safeEvent(database, owner, "ticket_rate_limited", "rejected", { limit: quota.limit }, startedAt);
@@ -118,6 +125,7 @@ export async function PUT(request: Request) {
     const ticket = parseTicket(body.ticket);
     database = getD1();
     await ensureRunStore(database);
+    if (!can(await resolveRole(database, owner, adminIds()), "invoke_capabilities")) return Response.json({ error: "forbidden" }, { status: 403 });
     const verified = await verifyInvocation({ ownerId: owner, claims: ticketClaims(ticket), signature: ticket.signature, secret });
     if (!verified.valid) {
       await safeEvent(database, owner, "ticket_rejected", "rejected", { reason: verified.reason }, startedAt);

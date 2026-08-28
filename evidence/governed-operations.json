@@ -1,0 +1,20 @@
+{
+  "phase": 9,
+  "authorization": {
+    "source": "authenticated Site principal",
+    "roles": ["admin", "reviewer", "operator", "agent", "viewer"],
+    "artifactApproval": "reviewer_or_admin",
+    "jobOperation": "operator_or_admin"
+  },
+  "scheduler": {
+    "authentication": ["administrator capability", "bearer scheduler secret"],
+    "expiredLeaseRecovery": true,
+    "outboxBatchLimit": 20
+  },
+  "alertDelivery": {
+    "signature": "HMAC-SHA-256 exact JSON body",
+    "deduplication": "owner, alert code, UTC hour",
+    "retry": "exponential backoff capped at one hour",
+    "destinationConfigurationRequired": true
+  }
+}

@@ -77,3 +77,7 @@ export const automationJobs = sqliteTable(
   },
   (table) => [index("idx_automation_jobs_owner_status_created").on(table.ownerId, table.status, table.createdAt)],
 );
+export const userRoles = sqliteTable("user_roles", { subjectId: text("subject_id").primaryKey(), role: text("role").notNull(), assignedBy: text("assigned_by").notNull(), createdAt: text("created_at").notNull(), updatedAt: text("updated_at").notNull() });
+export const alertOutbox = sqliteTable("alert_outbox", {
+  id: text("id").primaryKey(), ownerId: text("owner_id").notNull(), alertCode: text("alert_code").notNull(), severity: text("severity").notNull(), status: text("status").notNull(), attempts: integer("attempts").notNull(), nextAttemptAt: text("next_attempt_at").notNull(), lastError: text("last_error"), createdAt: text("created_at").notNull(), updatedAt: text("updated_at").notNull(),
+}, (table) => [index("idx_alert_outbox_status_next").on(table.status, table.nextAttemptAt)]);

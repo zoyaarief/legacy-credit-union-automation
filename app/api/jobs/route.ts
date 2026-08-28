@@ -7,6 +7,7 @@ import { consumeInvocationQuota, recordOperationalEvent } from "@/lib/operations
 import { capabilityFingerprint } from "@/lib/persistence/contracts";
 import { decryptEvidence, encryptEvidence } from "@/lib/security/evidence";
 import { signInvocation } from "@/lib/security/invocation";
+import { can, configuredAdmins, resolveRole } from "@/lib/auth/roles";
 
 export const dynamic = "force-dynamic";
 const LEASE_MS = 180_000;
@@ -21,7 +22,7 @@ function ownerId(request: Request) {
 
 function secrets() {
   const worker = env as unknown as {
-    EVIDENCE_ENCRYPTION_KEY?: string; EVIDENCE_KEY_VERSION?: string; EVIDENCE_PREVIOUS_ENCRYPTION_KEY?: string; EVIDENCE_PREVIOUS_KEY_VERSION?: string; INVOCATION_SIGNING_KEY?: string;
+    EVIDENCE_ENCRYPTION_KEY?: string; EVIDENCE_KEY_VERSION?: string; EVIDENCE_PREVIOUS_ENCRYPTION_KEY?: string; EVIDENCE_PREVIOUS_KEY_VERSION?: string; INVOCATION_SIGNING_KEY?: string; AUTOMATION_ADMIN_USER_IDS?: string;
   };
   return {
     current: worker.EVIDENCE_ENCRYPTION_KEY ?? process.env.EVIDENCE_ENCRYPTION_KEY,
@@ -29,6 +30,7 @@ function secrets() {
     previous: worker.EVIDENCE_PREVIOUS_ENCRYPTION_KEY ?? process.env.EVIDENCE_PREVIOUS_ENCRYPTION_KEY,
     previousVersion: worker.EVIDENCE_PREVIOUS_KEY_VERSION ?? process.env.EVIDENCE_PREVIOUS_KEY_VERSION,
     signing: worker.INVOCATION_SIGNING_KEY ?? process.env.INVOCATION_SIGNING_KEY,
+    admins: configuredAdmins(worker.AUTOMATION_ADMIN_USER_IDS ?? process.env.AUTOMATION_ADMIN_USER_IDS),
   };
 }
 
@@ -73,6 +75,7 @@ export async function POST(request: Request) {
     const { artifact, variant } = resolveCapabilityVariant(rawCapability, body.variantId);
     const inputs = validateInvocationInputs(artifact, body.inputs);
     const database = getD1(); await ensureRunStore(database);
+    if (!can(await resolveRole(database, owner, config.admins), "enqueue_jobs")) return Response.json({ error: "forbidden" }, { status: 403 });
     const id = crypto.randomUUID(); const now = new Date().toISOString();
     const encrypted = await encryptEvidence(inputs, config.current, `${owner}:job:${id}:inputs`, config.currentVersion);
     const hash = await capabilityFingerprint(artifact);
@@ -93,6 +96,7 @@ export async function PATCH(request: Request) {
     if (typeof body.jobId !== "string") return Response.json({ error: "invalid_job_id" }, { status: 400 });
     const { database, row } = await findJob(owner, body.jobId); if (!row) return Response.json({ error: "job_not_found" }, { status: 404 });
     await ensureRunStore(database);
+    if (!can(await resolveRole(database, owner, secrets().admins), "operate_jobs")) return Response.json({ error: "forbidden" }, { status: 403 });
     if (body.action === "complete") {
       const allowed: JobStatus[] = ["success", "business_outcome", "human_required", "failure"];
       if (!body.status || !allowed.includes(body.status)) return Response.json({ error: "invalid_status" }, { status: 400 });
@@ -128,6 +132,6 @@ export async function PATCH(request: Request) {
 export async function DELETE(request: Request) {
   const owner = ownerId(request); if (!owner) return Response.json({ error: "authentication_required" }, { status: 401 });
   const jobId = new URL(request.url).searchParams.get("jobId"); if (!jobId) return Response.json({ error: "invalid_job_id" }, { status: 400 });
-  try { const database = getD1(); await ensureRunStore(database); await database.prepare("UPDATE automation_jobs SET status = 'cancelled', updated_at = ?, completed_at = ? WHERE id = ? AND owner_id = ? AND status IN ('queued','human_required')").bind(new Date().toISOString(), new Date().toISOString(), jobId, owner).run(); return Response.json({ cancelled: true }); }
+  try { const database = getD1(); await ensureRunStore(database); if (!can(await resolveRole(database, owner, secrets().admins), "operate_jobs")) return Response.json({ error: "forbidden" }, { status: 403 }); await database.prepare("UPDATE automation_jobs SET status = 'cancelled', updated_at = ?, completed_at = ? WHERE id = ? AND owner_id = ? AND status IN ('queued','human_required')").bind(new Date().toISOString(), new Date().toISOString(), jobId, owner).run(); return Response.json({ cancelled: true }); }
   catch { return Response.json({ error: "cancel_failed" }, { status: 503 }); }
 }

@@ -88,6 +88,9 @@ export async function ensureRunStore(database: D1Database) {
       result_json TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, claimed_at TEXT, lease_expires_at TEXT, completed_at TEXT
     )`),
     database.prepare("CREATE INDEX IF NOT EXISTS idx_automation_jobs_owner_status_created ON automation_jobs(owner_id, status, created_at DESC)"),
+    database.prepare("CREATE TABLE IF NOT EXISTS user_roles (subject_id TEXT PRIMARY KEY NOT NULL, role TEXT NOT NULL, assigned_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"),
+    database.prepare("CREATE TABLE IF NOT EXISTS alert_outbox (id TEXT PRIMARY KEY NOT NULL, owner_id TEXT NOT NULL, alert_code TEXT NOT NULL, severity TEXT NOT NULL, status TEXT NOT NULL, attempts INTEGER NOT NULL, next_attempt_at TEXT NOT NULL, last_error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"),
+    database.prepare("CREATE INDEX IF NOT EXISTS idx_alert_outbox_status_next ON alert_outbox(status, next_attempt_at)"),
   ]);
   await database.prepare("PRAGMA optimize").run();
 

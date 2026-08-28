@@ -1,4 +1,6 @@
 import { ensureRunStore, getD1 } from "@/db";
+import { env } from "cloudflare:workers";
+import { can, configuredAdmins, resolveRole } from "@/lib/auth/roles";
 import { capabilityFingerprint, sanitizeCapabilityForStorage, type ArtifactReview } from "@/lib/persistence/contracts";
 
 export const dynamic = "force-dynamic";
@@ -35,6 +37,11 @@ async function upsert(request: Request, approve: boolean) {
     const artifactHash = await capabilityFingerprint(artifact);
     const database = getD1();
     await ensureRunStore(database);
+    if (approve) {
+      const worker = env as unknown as { AUTOMATION_ADMIN_USER_IDS?: string };
+      const role = await resolveRole(database, owner, configuredAdmins(worker.AUTOMATION_ADMIN_USER_IDS ?? process.env.AUTOMATION_ADMIN_USER_IDS));
+      if (!can(role, "review_artifacts")) return Response.json({ error: "forbidden" }, { status: 403 });
+    }
     const id = `${owner}:${artifactHash}`;
     const existing = await database.prepare("SELECT artifact_hash, artifact_name, artifact_version, state, created_at, reviewed_at FROM artifact_reviews WHERE id = ? AND owner_id = ?").bind(id, owner).all<ReviewRow>();
     const current = existing.results?.[0];
