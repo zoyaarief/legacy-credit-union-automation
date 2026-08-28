@@ -1,0 +1,25 @@
+{
+  "phase": 7,
+  "ticketPolicy": {
+    "algorithm": "HMAC-SHA-256",
+    "lifetimeSeconds": 120,
+    "ownerBound": true,
+    "canonicalArtifactReturnedAfterVerification": true
+  },
+  "rateLimit": {
+    "scope": "authenticated owner",
+    "ticketsPerMinute": 12,
+    "storage": "D1 atomic upsert"
+  },
+  "telemetry": {
+    "windowHours": 24,
+    "sensitiveInvocationValuesStored": false,
+    "events": ["ticket_issued", "ticket_verified", "ticket_rejected", "ticket_rate_limited", "agent_run_stored", "evidence_rotated"]
+  },
+  "evidenceRotation": {
+    "keyring": ["current", "previous"],
+    "batchSize": 50,
+    "ownerScoped": true,
+    "aadPreserved": true
+  }
+}

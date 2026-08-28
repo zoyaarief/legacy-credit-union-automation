@@ -1,6 +1,6 @@
 # Legacy Credit Union Computer-Use Automation
 
-Phase 6 adds an authenticated agent-facing capability catalog, reviewed tenant variants, fingerprint-verified invocation tickets, and multi-run stability scoring to the complete discovery, approval, replay, recovery, and human-handoff slice.
+Phase 7 adds short-lived owner-bound ticket signatures, durable invocation limits, operational telemetry, and version-aware evidence-key rotation to the complete discovery, approval, replay, recovery, agent invocation, and human-handoff slice.
 
 ## What works
 
@@ -24,6 +24,10 @@ Phase 6 adds an authenticated agent-facing capability catalog, reviewed tenant v
 - Fingerprint-verified invocation tickets that feed the existing deterministic browser executor
 - Reviewed main and east-branch tenant profiles within one canonical vendor family
 - Three-run live canary scoring with stable, needs-review, and unstable classifications
+- HMAC-SHA-256 invocation signatures with a 120-second lifetime and server verification before execution
+- Atomic D1 rate limits of 12 ticket issues per owner per minute
+- Owner-scoped 24-hour telemetry for tickets, rejections, agent runs, outcomes, and recoveries
+- Current/previous evidence keyring support with bounded re-encryption batches
 - Unit coverage for replay, recovery, encryption, discovery, model validation, storage policy, artifact fingerprints, fault classification, and handoff transitions
 
 ## Run locally
@@ -39,6 +43,8 @@ pnpm run dev
 `OPENAI_API_KEY` is optional. Without it, discovery uses the labeled safe simulator and the complete discovery-to-replay flow still works locally. Never commit `.env.local`.
 
 `EVIDENCE_ENCRYPTION_KEY` is optional only on localhost and must be a base64-encoded 32-byte key. Hosted production requires it; `EVIDENCE_KEY_VERSION` identifies the active key version.
+
+`INVOCATION_SIGNING_KEY` is required for agent tickets and must be a separate base64-encoded 32-byte key. During evidence rotation, configure the previous key and version, deploy the new current key, then use the Operations control to re-encrypt remaining rows before removing the previous key.
 
 Open `http://localhost:3000`.
 
@@ -63,6 +69,7 @@ pnpm run build
 
 - `app/page.tsx` — discovery, replay, handoff, agent catalog console, and browser adapters
 - `app/api/capabilities/route.ts` — authenticated catalog and typed invocation-ticket API
+- `app/api/operations/route.ts` — owner-scoped telemetry and bounded evidence-key rotation
 - `app/api/discovery/decide/route.ts` — server-only discovery provider boundary
 - `app/api/runs/route.ts` — authenticated durable history, expiry, integrity hashes, and deletion
 - `app/api/artifacts/route.ts` — owner-scoped exact-artifact review and approval
@@ -72,6 +79,8 @@ pnpm run build
 - `lib/automation/core.ts` — pausable deterministic executor and evidence contracts
 - `lib/automation/catalog.ts` — reviewed vendor/tenant profiles and invocation validation
 - `lib/automation/stability.ts` — multi-run stability scoring
+- `lib/operations/` — durable rate limits, telemetry events, and health summaries
+- `lib/security/invocation.ts` — owner-bound HMAC ticket signing and verification
 - `lib/handoff/` — control-transfer state machine
 - `capabilities/` — reviewed capability artifacts
 - `evidence/` — redacted example run evidence
@@ -80,4 +89,4 @@ pnpm run build
 
 ## Next phase
 
-Phase 7: short-lived signed invocation tickets, catalog rate limits, operational telemetry, and managed evidence-key rotation. True reviewer/operator separation still requires multiple authenticated users and remains a deployment concern rather than a simulated identity toggle.
+Phase 8: durable asynchronous job execution, resumable cross-device interventions, and alert thresholds over operational telemetry. True reviewer/operator separation still requires multiple authenticated users and remains a deployment concern rather than a simulated identity toggle.

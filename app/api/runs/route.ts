@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { ensureRunStore, getD1 } from "@/db";
 import { sanitizeRunRecord, sha256 } from "@/lib/persistence/contracts";
 import { decryptEvidence, encryptEvidence } from "@/lib/security/evidence";
+import { recordOperationalEvent } from "@/lib/operations/store";
 
 export const dynamic = "force-dynamic";
 
@@ -22,10 +23,15 @@ function isLocal(request: Request) {
 }
 
 function encryptionConfig() {
-  const workerEnv = env as unknown as { EVIDENCE_ENCRYPTION_KEY?: string; EVIDENCE_KEY_VERSION?: string };
+  const workerEnv = env as unknown as {
+    EVIDENCE_ENCRYPTION_KEY?: string; EVIDENCE_KEY_VERSION?: string;
+    EVIDENCE_PREVIOUS_ENCRYPTION_KEY?: string; EVIDENCE_PREVIOUS_KEY_VERSION?: string;
+  };
   return {
     secret: workerEnv.EVIDENCE_ENCRYPTION_KEY ?? process.env.EVIDENCE_ENCRYPTION_KEY,
     keyVersion: workerEnv.EVIDENCE_KEY_VERSION ?? process.env.EVIDENCE_KEY_VERSION ?? "v1",
+    previousSecret: workerEnv.EVIDENCE_PREVIOUS_ENCRYPTION_KEY ?? process.env.EVIDENCE_PREVIOUS_ENCRYPTION_KEY,
+    previousKeyVersion: workerEnv.EVIDENCE_PREVIOUS_KEY_VERSION ?? process.env.EVIDENCE_PREVIOUS_KEY_VERSION,
   };
 }
 
@@ -57,6 +63,9 @@ export async function POST(request: Request) {
         evidenceHash, createdAt, expiresAt,
       )
       .run();
+    if (record.kind === "agent_invocation") {
+      try { await recordOperationalEvent(database, owner, "agent_run_stored", "ok", { status: record.status }); } catch { /* Run storage must not depend on telemetry. */ }
+    }
     return Response.json({ stored: true, createdAt, expiresAt, evidenceHash, encryption: encrypted ? "aes-gcm" : "legacy-plaintext" });
   } catch (error) {
     if (error instanceof SyntaxError || (error instanceof Error && /invalid|required|must/i.test(error.message))) {
@@ -90,11 +99,16 @@ export async function GET(request: Request) {
     const encryption = encryptionConfig();
     const runs = await Promise.all((response.results ?? []).map(async (row) => {
       const encrypted = Boolean(row.evidence_ciphertext && row.evidence_iv);
-      if (encrypted && !encryption.secret) throw new Error("Evidence encryption key is unavailable.");
+      const evidenceSecret = row.evidence_key_version === encryption.keyVersion
+        ? encryption.secret
+        : row.evidence_key_version === encryption.previousKeyVersion
+          ? encryption.previousSecret
+          : undefined;
+      if (encrypted && !evidenceSecret) throw new Error("Evidence encryption key is unavailable.");
       const evidence = encrypted
         ? await decryptEvidence(
             { ciphertext: row.evidence_ciphertext!, iv: row.evidence_iv!, keyVersion: row.evidence_key_version ?? "unknown" },
-            encryption.secret!,
+            evidenceSecret!,
             `${owner}:${row.id}:${row.evidence_hash}`,
           )
         : JSON.parse(row.evidence_json);

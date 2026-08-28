@@ -30,9 +30,10 @@ import {
 } from "@/lib/discovery/core";
 import { createAdaptiveDiscoveryProvider } from "@/lib/discovery/provider-client";
 import { INITIAL_HANDOFF_STATE, transitionHandoff, type HandoffState } from "@/lib/handoff/core";
-import type { CapabilityCatalogEntry, InvocationTicket } from "@/lib/automation/catalog";
+import type { CapabilityCatalogEntry, InvocationTicket, VerifiedInvocation } from "@/lib/automation/catalog";
 import { scoreStability, type StabilityRun, type StabilityScore } from "@/lib/automation/stability";
-import { capabilityFingerprint, type ArtifactReview, type RunRecord, type RunRecordInput } from "@/lib/persistence/contracts";
+import type { OperationalSnapshot } from "@/lib/operations/core";
+import type { ArtifactReview, RunRecord, RunRecordInput } from "@/lib/persistence/contracts";
 
 const savedCapability = validateCapability(rawCapability);
 const pause = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -260,6 +261,8 @@ export default function Home() {
   const [agentResult, setAgentResult] = useState<ReplayResult | null>(null);
   const [activeTicket, setActiveTicket] = useState<InvocationTicket | null>(null);
   const [stability, setStability] = useState<StabilityScore | null>(null);
+  const [operations, setOperations] = useState<OperationalSnapshot | null>(null);
+  const [rotationState, setRotationState] = useState<"idle" | "running" | "complete" | "unavailable">("idle");
   const activeArtifact = useMemo(() => generatedArtifact ?? savedCapability, [generatedArtifact]);
   const artifactApproved = !generatedArtifact || artifactReview?.state === "approved";
   const busy = discoveryStatus === "running" || runStatus === "running" || agentStatus === "running" || handoff.owner === "resuming";
@@ -281,8 +284,17 @@ export default function Home() {
       setCatalog(body.entries); setCatalogState("ready");
     } catch { setCatalogState("unavailable"); }
   }
+
+  async function loadOperations() {
+    try {
+      const response = await fetch("/api/operations", { cache: "no-store" });
+      if (!response.ok) throw new Error("operations unavailable");
+      const body = await response.json() as { snapshot: OperationalSnapshot };
+      setOperations(body.snapshot);
+    } catch { setOperations(null); }
+  }
   useEffect(() => {
-    const timer = window.setTimeout(() => { void loadHistory(); void loadCatalog(); }, 0);
+    const timer = window.setTimeout(() => { void loadHistory(); void loadCatalog(); void loadOperations(); }, 0);
     return () => { window.clearTimeout(timer); stopHumanCaptureRef.current?.(); };
   }, []);
 
@@ -333,7 +345,7 @@ export default function Home() {
     if (result.status !== "human_required") await persistRun({ runId: result.runId, kind: "replay", status: result.status, artifactName: activeArtifact.name, artifactVersion: activeArtifact.version, summary: { eventCount: result.evidence.length, outcome: result.status, attempts: execution.attempts, recovered: execution.recovered }, evidence: result.evidence, artifact: activeArtifact });
   }
 
-  async function requestInvocationTicket(): Promise<InvocationTicket> {
+  async function requestInvocationTicket(): Promise<VerifiedInvocation> {
     const response = await fetch("/api/capabilities", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -341,13 +353,14 @@ export default function Home() {
     });
     if (!response.ok) throw new AutomationError("invocation_rejected", "invalid_request", "The catalog rejected this invocation.");
     const body = await response.json() as { ticket: InvocationTicket };
-    if (await capabilityFingerprint(body.ticket.artifact) !== body.ticket.artifactHash) {
-      throw new AutomationError("ticket_integrity_failed", "policy_denied", "The invocation artifact does not match its catalog fingerprint.");
-    }
-    return body.ticket;
+    setActiveTicket(body.ticket);
+    const verification = await fetch("/api/capabilities", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ticket: body.ticket }) });
+    if (!verification.ok) throw new AutomationError("ticket_verification_failed", "policy_denied", "The signed invocation ticket could not be verified.");
+    const verified = await verification.json() as { verified: true; invocation: VerifiedInvocation };
+    return verified.invocation;
   }
 
-  async function executeAgentTicket(ticket: InvocationTicket, runLabel: string): Promise<{ result: ReplayResult; stabilityRun: StabilityRun }> {
+  async function executeAgentTicket(ticket: VerifiedInvocation, runLabel: string): Promise<{ result: ReplayResult; stabilityRun: StabilityRun }> {
     const frame = frameRef.current;
     if (!frame) throw new AutomationError("target_unavailable", "recoverable", "The target application is not available.", true);
     const execution = await executeCapabilityWithRecovery({
@@ -371,6 +384,7 @@ export default function Home() {
       evidence: result.evidence,
       artifact: ticket.artifact,
     });
+    await loadOperations();
     return { result, stabilityRun: { status: result.status, attempts: execution.attempts, recovered: execution.recovered } };
   }
 
@@ -379,7 +393,6 @@ export default function Home() {
     setAgentStatus("running"); setAgentLogs([]); setAgentResult(null); setStability(null);
     try {
       const ticket = await requestInvocationTicket();
-      setActiveTicket(ticket);
       const executed = await executeAgentTicket(ticket, "invoke");
       setAgentResult(executed.result); setAgentStatus(executed.result.status);
     } catch {
@@ -395,7 +408,6 @@ export default function Home() {
     try {
       for (let index = 1; index <= 3; index += 1) {
         const ticket = await requestInvocationTicket();
-        setActiveTicket(ticket);
         const executed = await executeAgentTicket(ticket, `canary ${index}`);
         runs.push(executed.stabilityRun);
         setAgentResult(executed.result);
@@ -407,6 +419,16 @@ export default function Home() {
       const score = scoreStability([...runs, { status: "failure", attempts: 1, recovered: false }]);
       setStability(score); setAgentStatus("failure");
     }
+  }
+
+  async function rotateEvidence() {
+    if (rotationState === "running") return;
+    setRotationState("running");
+    try {
+      const response = await fetch("/api/operations", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "rotate_evidence" }) });
+      if (!response.ok) throw new Error("rotation unavailable");
+      setRotationState("complete"); await loadHistory(); await loadOperations();
+    } catch { setRotationState("unavailable"); }
   }
 
   async function startHandoff() {
@@ -458,7 +480,7 @@ export default function Home() {
   return <main className="console-shell">
     <header className="topbar"><div className="brand-lockup"><span className="brand-mark">NC</span><div><p className="eyebrow">Northstar Automation Lab</p><h1>Computer-Use Control Plane</h1></div></div><div className="environment-badge"><span /> Protected demo</div></header>
 
-    <section className="overview-grid phase-two-overview"><div><p className="section-kicker">Phase 6 · Agent capability service</p><h2>Discover once, invoke by contract, measure stability.</h2><p className="lede">Agents now receive a typed capability catalog and invocation ticket. Reviewed tenant variants adapt the target while the same deterministic executor and evidence policy stay in force.</p></div><dl className="capability-facts"><div><dt>Agent contract</dt><dd>Typed catalog API</dd></div><div><dt>Tenant variants</dt><dd>2 reviewed profiles</dd></div><div><dt>Stability window</dt><dd>3 live canaries</dd></div><div><dt>Execution</dt><dd>Deterministic only</dd></div></dl></section>
+    <section className="overview-grid phase-two-overview"><div><p className="section-kicker">Phase 7 · Operational trust</p><h2>Sign every invocation, bound every caller, watch every run.</h2><p className="lede">Short-lived owner-bound tickets are verified before execution. Durable rate limits, operational telemetry, and version-aware evidence re-encryption close the production control loop.</p></div><dl className="capability-facts"><div><dt>Ticket lifetime</dt><dd>120 seconds</dd></div><div><dt>Rate limit</dt><dd>12 / minute / owner</dd></div><div><dt>Telemetry</dt><dd>24-hour health</dd></div><div><dt>Key rotation</dt><dd>Version-aware rewrap</dd></div></dl></section>
 
     <nav className="mode-switch" aria-label="Automation mode">
       <button className={mode === "discover" ? "active" : ""} onClick={() => setMode("discover")} disabled={busy}><span>01</span> Discover</button>
@@ -487,9 +509,10 @@ export default function Home() {
         {mode === "catalog" && <div className="catalog-console">
           <div className="catalog-contract"><div><span className={`catalog-state ${catalogState}`}>{catalogState}</span><p className="result-label">GET /api/capabilities</p></div><h4>{catalogEntry?.name ?? "Capability catalog"}</h4><p>{catalogEntry?.description ?? "Loading the authenticated agent-facing contract…"}</p>{catalogEntry && <dl><div><dt>Version</dt><dd>{catalogEntry.version}</dd></div><div><dt>Risk</dt><dd>{catalogEntry.risk.replace("_", " ")}</dd></div><div><dt>Input</dt><dd>memberId · string</dd></div><div><dt>Outputs</dt><dd>{Object.keys(catalogEntry.outputs).join(", ")}</dd></div></dl>}</div>
           <div className="catalog-controls"><label htmlFor="catalog-variant">Reviewed tenant variant</label><select id="catalog-variant" className="policy-select" value={selectedVariant} onChange={(event) => setSelectedVariant(event.target.value)} disabled={busy || catalogState !== "ready"}>{catalogEntry?.variants.map((variant) => <option key={variant.id} value={variant.id}>{variant.label}</option>)}</select><div className="variant-facts"><span>{catalogVariant?.vendorFamily ?? "vendor family pending"}</span><strong>{catalogVariant?.entryPoint ?? "—"}</strong><small>{catalogVariant?.reviewState ?? "unavailable"} override</small></div><label htmlFor="catalog-member-id">Typed invocation input</label><input id="catalog-member-id" value={memberId} onChange={(event) => setMemberId(event.target.value.replace(/\D/g, "").slice(0, 5))} inputMode="numeric" required pattern="[0-9]{5}" /><div className="catalog-actions"><button onClick={() => void invokeFromCatalog()} disabled={busy || catalogState !== "ready" || memberId.length !== 5}>Invoke capability</button><button className="secondary" onClick={() => void runStabilityCanary()} disabled={busy || catalogState !== "ready" || memberId.length !== 5}>Run 3-canary score</button></div></div>
-          {activeTicket && <div className="ticket-card"><span>Invocation ticket</span><strong>{activeTicket.invocationId.slice(0, 13)}…</strong><small>{activeTicket.variant.id} · {activeTicket.capabilityName}@{activeTicket.capabilityVersion} · hash {activeTicket.artifactHash.slice(0, 10)}</small></div>}
+          {activeTicket && <div className="ticket-card"><span>Signed invocation ticket</span><strong>{activeTicket.signature.slice(0, 13)}…</strong><small>{activeTicket.variant.id} · expires {formatTime(activeTicket.expiresAt)} · hash {activeTicket.artifactHash.slice(0, 10)}</small></div>}
           <ResultCard result={agentResult} />
           {stability && <div className={`stability-card ${stability.label}`}><div><span>Multi-run stability</span><strong>{stability.label.replace("_", " ")}</strong></div><b>{Math.round(stability.successRate * 100)}%</b><small>{stability.successfulRuns}/{stability.totalRuns} successful · {stability.recoveredRuns} recovered</small></div>}
+          <div className="operations-card"><div className="operations-heading"><div><span>24-hour operations</span><strong>{operations ? `${Math.round(operations.successRate * 100)}% success` : "Loading telemetry"}</strong></div><button onClick={() => void loadOperations()}>Refresh</button></div><dl><div><dt>Issued / verified</dt><dd>{operations ? `${operations.ticketsIssued} / ${operations.ticketsVerified}` : "—"}</dd></div><div><dt>Rejected / limited</dt><dd>{operations ? `${operations.ticketsRejected} / ${operations.rateLimited}` : "—"}</dd></div><div><dt>Agent runs</dt><dd>{operations?.agentRuns ?? "—"}</dd></div><div><dt>Recovered</dt><dd>{operations?.recoveredRuns ?? "—"}</dd></div></dl><div className="key-rotation"><span>Evidence key {operations?.currentKeyVersion ?? "managed"}</span><small>{operations?.staleEvidenceRows ?? 0} rows awaiting rotation</small><button onClick={() => void rotateEvidence()} disabled={!operations || operations.staleEvidenceRows === 0 || !operations.previousKeyConfigured || rotationState === "running"}>{rotationState === "running" ? "Rotating…" : operations?.staleEvidenceRows ? "Rotate evidence" : "Rotation current"}</button></div></div>
         </div>}
 
         <div className="log-header"><span>{mode === "discover" ? "Discovery evidence" : mode === "handoff" ? "Handoff evidence" : mode === "catalog" ? "Agent invocation evidence" : "Replay evidence"}</span><span>{activeLogs.length} events</span></div><ol className="event-log phase-two-log">{activeLogs.length === 0 && <li className="log-empty">No evidence yet.</li>}{activeLogs.map((log, index) => <li key={`${log.time}-${index}`} className={log.state}><span className="log-marker" /><div><strong>{log.step}</strong><p>{log.detail}</p>{log.provider && <small>{log.provider}</small>}</div><time>{log.time}</time></li>)}</ol>

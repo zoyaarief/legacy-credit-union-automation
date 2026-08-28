@@ -26,10 +26,13 @@ export type InvocationTicket = {
   capabilityName: string;
   capabilityVersion: string;
   variant: CapabilityVariant;
-  artifact: Capability;
   inputs: Record<string, string>;
   issuedAt: string;
+  expiresAt: string;
+  signature: string;
 };
+
+export type VerifiedInvocation = InvocationTicket & { artifact: Capability };
 
 type ReviewedVariant = CapabilityVariant & {
   stepOverrides: Record<string, Locator[]>;

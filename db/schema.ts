@@ -1,4 +1,4 @@
-import { index, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 export const automationRuns = sqliteTable(
   "automation_runs",
@@ -37,4 +37,30 @@ export const artifactReviews = sqliteTable(
     reviewedAt: text("reviewed_at"),
   },
   (table) => [index("idx_artifact_reviews_owner_state").on(table.ownerId, table.state)],
+);
+
+export const invocationRateLimits = sqliteTable(
+  "invocation_rate_limits",
+  {
+    id: text("id").primaryKey(),
+    ownerId: text("owner_id").notNull(),
+    windowStart: text("window_start").notNull(),
+    issuedCount: integer("issued_count").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [index("idx_invocation_rate_limits_owner_window").on(table.ownerId, table.windowStart)],
+);
+
+export const operationalEvents = sqliteTable(
+  "operational_events",
+  {
+    id: text("id").primaryKey(),
+    ownerId: text("owner_id").notNull(),
+    eventType: text("event_type").notNull(),
+    outcome: text("outcome").notNull(),
+    latencyMs: integer("latency_ms").notNull(),
+    metadataJson: text("metadata_json").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [index("idx_operational_events_owner_created").on(table.ownerId, table.createdAt)],
 );

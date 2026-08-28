@@ -2,7 +2,7 @@
 
 ## Architecture
 
-The system has ten seams: a goal-driven discovery engine, a provider boundary, a versioned capability contract, an authenticated capability catalog, reviewed tenant profiles, an exact-artifact approval registry, a pausable deterministic executor, a bounded recovery wrapper, a control-transfer state machine, and per-user durable run storage. Discovery compiles only a verified trace. Generated or restored artifacts enter `draft` and cannot replay until the signed-in reviewer approves their SHA-256 fingerprint. The bundled reviewed baseline and its reviewed tenant variants remain executable. D1 stores sanitized approvals, artifacts, outcomes, surface snapshots, and encrypted evidence behind the authenticated Sites user id.
+The system has four control planes around the deterministic executor: discovery and compilation, artifact review and catalog invocation, live execution and handoff, and durable security operations. Discovery compiles only a verified trace. Generated or restored artifacts enter `draft` and cannot replay until the signed-in reviewer approves their SHA-256 fingerprint. The bundled reviewed baseline and its reviewed tenant variants remain executable. D1 stores sanitized approvals, artifacts, rate windows, operational events, outcomes, surface snapshots, and encrypted evidence behind the authenticated Sites user id.
 
 The server provider uses the OpenAI Responses API with strict structured output and `store: false`. If no API key is configured, the client labels and uses a policy-equivalent simulator; other provider failures remain visible instead of silently becoming simulated success. The target and member data are local and synthetic.
 
@@ -24,7 +24,7 @@ Results distinguish success, business outcome, human-required intervention, reco
 
 ## Agent catalog & stability
 
-Authenticated agents can list the typed capability contract and request an invocation ticket by exact capability name, version, tenant variant, and typed inputs. The server resolves only reviewed variants and fingerprints the resulting artifact. The browser verifies that fingerprint before passing the artifact to the existing deterministic executor; the catalog does not introduce a second execution engine.
+Authenticated agents can list the typed capability contract and request an invocation ticket by exact capability name, version, tenant variant, and typed inputs. The server resolves only reviewed variants and fingerprints the resulting artifact. Ticket issue is limited atomically in D1 to 12 requests per authenticated owner per minute. Every ticket is bound to the owner, exact capability, variant, typed inputs, artifact fingerprint, issue time, and 120-second expiry with HMAC-SHA-256. The browser submits it back to the server for signature, lifetime, input, variant, and fingerprint verification, and executes only the canonical artifact returned by that verification; the catalog does not introduce a second execution engine.
 
 The console can execute three live canaries against the selected variant. All clean successes classify as stable, any recovery or a two-of-three result requires review, and fewer than two successes is unstable. Every canary remains an encrypted, owner-scoped `agent_invocation` run in the audit trail.
 
@@ -36,10 +36,16 @@ After an operator accepts, the existing iframe becomes the manual control surfac
 
 ## Safety
 
-The capability is read-only. Runtime policy enforces target path, action allowlist, step budget, total timeout, input shape, declared extraction fields, and final checkpoint. Sensitive values stay in the browser adapter and are replaced with placeholders before provider calls and evidence recording. Provider responses cannot supply selectors directly.
+The capability is read-only. Runtime policy enforces target path, action allowlist, step budget, total timeout, input shape, declared extraction fields, and final checkpoint. Discovery inputs stay in the browser adapter and are replaced with placeholders before provider calls and evidence recording. Agent invocation inputs cross only the authenticated issue/verify boundary, are signature-bound, and never enter telemetry or run evidence. Provider responses cannot supply selectors directly.
 
 The private Site supplies the stable authenticated user id used for record ownership. Local development receives an isolated demo owner only on localhost. Stored evidence is sanitized, SHA-256 fingerprinted, AES-256-GCM encrypted with a managed runtime secret, and assigned a reviewer-selected 7, 30, or 90-day expiry. AES-GCM additional authenticated data binds ciphertext to owner, run id, and evidence hash, preventing row swapping. Expired rows are pruned on access, and deletion always includes the authenticated owner id. Key versions are stored beside ciphertext so rotation can use a controlled decrypt-and-reencrypt migration.
 
+The runtime accepts a current and previous evidence key. Reads resolve the secret by stored key version, while the rotation endpoint re-encrypts at most 50 owner-scoped rows per request under the current version and preserves the authenticated context. The previous key is removable only after telemetry reports zero stale rows.
+
+## Operations
+
+Operational events contain no invocation values. Ticket issue, verification, rejection, limiting, agent-run storage, and evidence rotation are owner-scoped in D1. The console summarizes the last 24 hours, including success and recovery rates, and exposes current key-version posture. Telemetry failures never change the automation contract result.
+
 ## Cuts
 
-Phase 6 completes agent-facing catalog invocation, reviewed vendor/tenant overrides, and live multi-run stability scoring. The richer failure signal remains a redacted structured surface snapshot rather than a screenshot to avoid capturing regulated values. The private demo has one authenticated owner, so separate reviewer/operator identities and multi-party approval are not fabricated in client state; they require multiple real principals and server-managed role assignments. Short-lived signed tickets, catalog rate limiting, operational telemetry, key-rotation automation, broader network/permission faults, and cross-device continuation remain deliberate cuts. Live model execution still requires a configured server-side API key; the safe simulator keeps the core runnable without one.
+Phase 7 completes signed ticket verification, durable catalog rate limiting, operational telemetry, and bounded evidence-key rotation. The richer failure signal remains a redacted structured surface snapshot rather than a screenshot to avoid capturing regulated values. The private demo has one authenticated owner, so separate reviewer/operator identities and multi-party approval are not fabricated in client state; they require multiple real principals and server-managed role assignments. Asynchronous server-side jobs, alert delivery, broader network/permission faults, and cross-device continuation remain deliberate cuts. Live model execution still requires a configured server-side API key; the safe simulator keeps the core runnable without one.

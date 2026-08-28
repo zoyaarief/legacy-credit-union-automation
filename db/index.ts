@@ -63,7 +63,26 @@ export async function ensureRunStore(database: D1Database) {
       reviewed_at TEXT
     )`),
     database.prepare("CREATE INDEX IF NOT EXISTS idx_artifact_reviews_owner_state ON artifact_reviews(owner_id, state)"),
+    database.prepare(`CREATE TABLE IF NOT EXISTS invocation_rate_limits (
+      id TEXT PRIMARY KEY NOT NULL,
+      owner_id TEXT NOT NULL,
+      window_start TEXT NOT NULL,
+      issued_count INTEGER NOT NULL,
+      updated_at TEXT NOT NULL
+    )`),
+    database.prepare("CREATE INDEX IF NOT EXISTS idx_invocation_rate_limits_owner_window ON invocation_rate_limits(owner_id, window_start)"),
+    database.prepare(`CREATE TABLE IF NOT EXISTS operational_events (
+      id TEXT PRIMARY KEY NOT NULL,
+      owner_id TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      outcome TEXT NOT NULL,
+      latency_ms INTEGER NOT NULL,
+      metadata_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )`),
+    database.prepare("CREATE INDEX IF NOT EXISTS idx_operational_events_owner_created ON operational_events(owner_id, created_at DESC)"),
   ]);
+  await database.prepare("PRAGMA optimize").run();
 
   // Local Miniflare databases can predate the checked-in migration. Keep the
   // runtime bootstrap additive so an existing demo database remains usable.
