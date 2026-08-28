@@ -1,6 +1,6 @@
 # Legacy Credit Union Computer-Use Automation
 
-Phase 10 adds durable, risk-based capability approvals with separation of duties, a reviewer queue, and administrator-managed team roles.
+The submission-ready system implements the complete discovery → capability → deterministic replay → human handoff path, with security, evidence, and optional production controls around it.
 
 ## What works
 
@@ -61,18 +61,29 @@ pnpm run dev
 
 Open `http://localhost:3000`.
 
-- Discover with member `12345`, approve the exact generated artifact, then replay it.
-- Use member `00000` to verify the `member_not_found` outcome.
-- Select session expiry or slow load to verify one bounded recovery and successful checkpoint completion. Application errors stop without retry.
-- Choose a retention window or delete a stored run from the audit trail.
-- Open **Human handoff**, start the assisted replay, accept control, click **Continue lookup** inside the live target, then resume automation.
-- Open **Agent API**, select a reviewed tenant profile, invoke it, or run the three-canary stability score.
-- Enqueue the current invocation, run it later, or rehydrate a waiting intervention from the durable job queue.
-- Open `/legacy` to operate the target manually.
+## Demo path
+
+Start the application:
+
+```bash
+pnpm run dev
+```
+
+Then open `http://localhost:3000` and run this exact flow:
+
+1. In **Discover**, keep the supplied goal, use member `12345`, and select **Discover capability**.
+2. Approve the generated artifact, switch to **Replay**, and select **Run capability**. The structured result must return `$2,458.17`, `Active`, and a verified checkpoint.
+3. Replay member `00000`. The result must be the `member_not_found` business outcome, not a failure.
+4. Replay `12345` with **session expired**. The run must recover once and then succeed. **Application error** must stop without retry.
+5. Open **Human handoff**, start the assisted replay, accept control, click **Continue lookup** inside the live target, and resume automation.
+6. Open **Agent API**, invoke the reviewed tenant capability, run the three-canary score, and optionally enqueue the invocation.
+
+Without `OPENAI_API_KEY`, step 1 is clearly labeled `safe-simulator`. With the key configured, the same flow uses the server-only OpenAI decision provider.
 
 ## Verify
 
 ```bash
+pnpm run verify:submission
 pnpm test
 pnpm run typecheck
 pnpm run lint
@@ -89,7 +100,7 @@ pnpm run build
 - `app/api/scheduler/route.ts` — lease recovery and signed retrying alert dispatch
 - `app/api/discovery/decide/route.ts` — server-only discovery provider boundary
 - `app/api/runs/route.ts` — authenticated durable history, expiry, integrity hashes, and deletion
-- `app/api/artifacts/route.ts` — owner-scoped exact-artifact review and approval
+- `app/api/artifacts/route.ts` — fingerprint-scoped review requests, quorum, and durable decisions
 - `app/legacy/page.tsx` — synthetic legacy credit-union application
 - `db/` and `drizzle/` — D1 schema, access helper, and migration
 - `lib/discovery/` — discovery engine, provider validation, and OpenAI adapter
@@ -102,11 +113,11 @@ pnpm run build
 - `lib/alerts/delivery.ts` — exact-body webhook signing and delivery
 - `lib/jobs/core.ts` — durable job contracts
 - `lib/handoff/` — control-transfer state machine
-- `capabilities/` — reviewed capability artifacts
-- `evidence/` — redacted example run evidence
+- `capabilities/` — reviewed runtime capability artifacts
+- `evidence/` — saved capability plus redacted discovery, replay, failure, handoff, and policy evidence
 - `tests/` — replay and discovery tests
 - `REPORT.md` — design decisions and phase cut line
 
-## Next phase
+## Submission
 
-Phase 11: grant additional Site users, connect the production webhook and scheduler provider, and exercise the two-reviewer workflow with real principals.
+Before publishing the repository, run the complete **Verify** block from a clean checkout. The remaining external steps are to create the public GitHub repository, optionally configure a live OpenAI key, and send the repository URL using the applicant email address.

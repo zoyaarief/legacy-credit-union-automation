@@ -22,7 +22,7 @@ Results distinguish success, business outcome, human-required intervention, reco
 
 `DiscoveryAdapter` and `SurfaceAdapter` isolate surface mechanics from planning and execution. A desktop or accessibility-tree adapter can implement the same contracts without changing artifacts or result handling. The catalog keys the capability to `northstar-core-member-services@8` and resolves only static reviewed tenant profiles. The east-branch profile changes the entry point and two ordered locators while preserving inputs, outputs, policy, business outcomes, and checkpoint semantics.
 
-## Agent catalog & stability
+### Agent catalog & stability
 
 Authenticated agents can list the typed capability contract and request an invocation ticket by exact capability name, version, tenant variant, and typed inputs. The server resolves only reviewed variants and fingerprints the resulting artifact. Ticket issue is limited atomically in D1 to 12 requests per authenticated owner per minute. Every ticket is bound to the owner, exact capability, variant, typed inputs, artifact fingerprint, issue time, and 120-second expiry with HMAC-SHA-256. The browser submits it back to the server for signature, lifetime, input, variant, and fingerprint verification, and executes only the canonical artifact returned by that verification; the catalog does not introduce a second execution engine.
 
@@ -42,11 +42,11 @@ The private Site supplies the stable authenticated user id used for record owner
 
 The runtime accepts a current and previous evidence key. Reads resolve the secret by stored key version, while the rotation endpoint re-encrypts at most 50 owner-scoped rows per request under the current version and preserves the authenticated context. The previous key is removable only after telemetry reports zero stale rows.
 
-## Operations
+### Operations
 
 Operational events contain no invocation values. Ticket issue, verification, rejection, limiting, agent-run storage, and evidence rotation are owner-scoped in D1. The console summarizes the last 24 hours, including success and recovery rates, and exposes current key-version posture. Telemetry failures never change the automation contract result.
 
-## Governed operations & alert delivery
+### Governed operations & alert delivery
 
 Authorization is resolved on the server from the authenticated Site principal. Administrators can assign reviewer, operator, agent, and viewer roles in D1. Artifact approval requires reviewer authority, while durable job claiming and completion require operator authority. The configured owner id is bootstrapped as administrator so existing single-owner operation remains available.
 
@@ -54,7 +54,7 @@ A protected control tick requeues expired job leases, deduplicates waiting-inter
 
 Approval is capability-fingerprint scoped rather than browser-state scoped. Read-only artifacts need one reviewer so the focused demo stays operable. Artifacts marked irreversible or requiring human approval need two distinct reviewer decisions, and the submitting principal cannot vote. Approval and rejection decisions are durable, replaceable by the same reviewer, and recompute the request state; any rejection blocks unattended replay. This adds real separation of duties without pretending the current owner-only Site already has multiple people.
 
-## Durable jobs & cross-device recovery
+### Durable jobs & cross-device recovery
 
 Jobs persist encrypted typed inputs, canonical artifact identity, status, lease, and redacted result metadata in D1. A browser worker claims a job for three minutes, receives a fresh signed ticket, verifies it through the existing catalog boundary, and uses the same deterministic executor. Expired leases are reclaimable.
 
