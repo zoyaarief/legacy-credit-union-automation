@@ -10,6 +10,7 @@ const MEMBERS: Record<string, Member> = {
 };
 
 export default function LegacyPortal() {
+  const [variant,setVariant] = useState<"main"|"east">("main");
   const [memberNumber,setMemberNumber] = useState("");
   const [member,setMember] = useState<Member|null>(null);
   const [searched,setSearched] = useState(false);
@@ -18,13 +19,18 @@ export default function LegacyPortal() {
   const [faultState,setFaultState] = useState<"session_expired"|"application_error"|null>(null);
 
   useEffect(() => {
-    document.documentElement.dataset.automationReady = "true";
-    return () => { delete document.documentElement.dataset.automationReady; };
+    const selected = new URLSearchParams(window.location.search).get("variant") === "east" ? "east" : "main";
+    let readinessFrame = 0;
+    const variantFrame = window.requestAnimationFrame(() => {
+      setVariant(selected);
+      readinessFrame = window.requestAnimationFrame(() => { document.documentElement.dataset.automationReady = "true"; });
+    });
+    return () => { window.cancelAnimationFrame(variantFrame); window.cancelAnimationFrame(readinessFrame); delete document.documentElement.dataset.automationReady; };
   }, []);
 
   function search(event:FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const submittedMemberNumber = String(new FormData(event.currentTarget).get("member_number") ?? "");
+    const submittedMemberNumber = String(new FormData(event.currentTarget).get(variant === "east" ? "member_number_east" : "member_number") ?? "");
     const fault = new URLSearchParams(window.location.search).get("fault");
     const delay = fault === "slow_load" ? 6000 : 650;
     setMemberNumber(submittedMemberNumber); setLoading(true); setSearched(false); setMember(null); setPermissionPending(false); setFaultState(null);
@@ -50,10 +56,10 @@ export default function LegacyPortal() {
         <div className="legacy-window-title">Member Inquiry Selection</div>
         <form onSubmit={search}>
           <table className="legacy-form-table"><tbody>
-            <tr><th>Member Number:</th><td><input name="member_number" value={memberNumber} onChange={(event)=>setMemberNumber(event.target.value.replace(/\D/g,"").slice(0,5))} maxLength={5} autoComplete="off" /></td></tr>
+            <tr><th>Member Number:</th><td><input name={variant === "east" ? "member_number_east" : "member_number"} value={memberNumber} onChange={(event)=>setMemberNumber(event.target.value.replace(/\D/g,"").slice(0,5))} maxLength={5} autoComplete="off" /></td></tr>
             <tr><th>Inquiry Type:</th><td><select name="inquiry_type" defaultValue="summary"><option value="summary">Member / Account Summary</option><option value="shares">Share Accounts Only</option></select></td></tr>
           </tbody></table>
-          <div className="legacy-actions"><button type="submit" disabled={loading}>{loading?"PLEASE WAIT...":"Retrieve Record"}</button><button type="button" onClick={()=>{setMemberNumber("");setMember(null);setSearched(false);setPermissionPending(false);setFaultState(null)}}>Clear</button></div>
+          <div className="legacy-actions"><button type="submit" disabled={loading}>{loading?"PLEASE WAIT...":variant === "east" ? "Find Member" : "Retrieve Record"}</button><button type="button" onClick={()=>{setMemberNumber("");setMember(null);setSearched(false);setPermissionPending(false);setFaultState(null)}}>Clear</button></div>
         </form>
       </div>
       {permissionPending && <div id="permission-dialog" className="legacy-dialog" role="dialog" aria-labelledby="permission-title">

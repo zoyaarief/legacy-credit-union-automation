@@ -1,6 +1,6 @@
 # Legacy Credit Union Computer-Use Automation
 
-Phase 5 adds application-layer evidence encryption and a bounded deterministic recovery policy to the complete discovery, approval, replay, and human-handoff slice.
+Phase 6 adds an authenticated agent-facing capability catalog, reviewed tenant variants, fingerprint-verified invocation tickets, and multi-run stability scoring to the complete discovery, approval, replay, recovery, and human-handoff slice.
 
 ## What works
 
@@ -20,6 +20,10 @@ Phase 5 adds application-layer evidence encryption and a bounded deterministic r
 - Injected session-expiry, slow-load timeout, and application-error paths
 - One clean retry for allowlisted recoverable failures; hard failures are never retried
 - AES-256-GCM evidence encryption in hosted storage with owner/run/hash authenticated context
+- Authenticated `GET/POST /api/capabilities` contract with typed inputs and outputs
+- Fingerprint-verified invocation tickets that feed the existing deterministic browser executor
+- Reviewed main and east-branch tenant profiles within one canonical vendor family
+- Three-run live canary scoring with stable, needs-review, and unstable classifications
 - Unit coverage for replay, recovery, encryption, discovery, model validation, storage policy, artifact fingerprints, fault classification, and handoff transitions
 
 ## Run locally
@@ -43,6 +47,7 @@ Open `http://localhost:3000`.
 - Select session expiry or slow load to verify one bounded recovery and successful checkpoint completion. Application errors stop without retry.
 - Choose a retention window or delete a stored run from the audit trail.
 - Open **Human handoff**, start the assisted replay, accept control, click **Continue lookup** inside the live target, then resume automation.
+- Open **Agent API**, select a reviewed tenant profile, invoke it, or run the three-canary stability score.
 - Open `/legacy` to operate the target manually.
 
 ## Verify
@@ -56,7 +61,8 @@ pnpm run build
 
 ## Project map
 
-- `app/page.tsx` — discovery, replay, handoff console, and browser adapters
+- `app/page.tsx` — discovery, replay, handoff, agent catalog console, and browser adapters
+- `app/api/capabilities/route.ts` — authenticated catalog and typed invocation-ticket API
 - `app/api/discovery/decide/route.ts` — server-only discovery provider boundary
 - `app/api/runs/route.ts` — authenticated durable history, expiry, integrity hashes, and deletion
 - `app/api/artifacts/route.ts` — owner-scoped exact-artifact review and approval
@@ -64,6 +70,8 @@ pnpm run build
 - `db/` and `drizzle/` — D1 schema, access helper, and migration
 - `lib/discovery/` — discovery engine, provider validation, and OpenAI adapter
 - `lib/automation/core.ts` — pausable deterministic executor and evidence contracts
+- `lib/automation/catalog.ts` — reviewed vendor/tenant profiles and invocation validation
+- `lib/automation/stability.ts` — multi-run stability scoring
 - `lib/handoff/` — control-transfer state machine
 - `capabilities/` — reviewed capability artifacts
 - `evidence/` — redacted example run evidence
@@ -72,4 +80,4 @@ pnpm run build
 
 ## Next phase
 
-Phase 6: an agent-facing capability catalog plus canonical tenant/vendor overrides and multi-run stability scoring. True reviewer/operator separation requires multiple authenticated users and remains a deployment concern rather than a simulated identity toggle.
+Phase 7: short-lived signed invocation tickets, catalog rate limits, operational telemetry, and managed evidence-key rotation. True reviewer/operator separation still requires multiple authenticated users and remains a deployment concern rather than a simulated identity toggle.

@@ -1,0 +1,22 @@
+{
+  "phase": 6,
+  "capability": "get_savings_balance@1.1.0",
+  "catalogVersion": "2026-08-28",
+  "vendorFamily": "northstar-core-member-services@8",
+  "reviewedVariants": [
+    { "id": "northstar-main", "entryPoint": "/legacy", "reviewState": "approved" },
+    { "id": "northstar-east", "entryPoint": "/legacy?variant=east", "reviewState": "approved" }
+  ],
+  "invocationPolicy": {
+    "typedInputs": true,
+    "artifactFingerprintVerified": true,
+    "deterministicExecution": true,
+    "maxRecoveryAttempts": 2
+  },
+  "stabilityWindow": {
+    "runs": 3,
+    "stableRule": "all runs succeed without recovery",
+    "needsReviewRule": "at least two thirds succeed or any run recovers",
+    "unstableRule": "fewer than two thirds succeed"
+  }
+}

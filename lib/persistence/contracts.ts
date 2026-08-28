@@ -1,7 +1,7 @@
 import { validateCapability, type Capability, type EvidenceEvent } from "../automation/core.ts";
 import { redactDiscoveryText, type DiscoveryEvidenceEvent } from "../discovery/core.ts";
 
-export type StoredRunKind = "discovery" | "replay" | "handoff";
+export type StoredRunKind = "discovery" | "replay" | "handoff" | "agent_invocation";
 export type StoredRunStatus = "success" | "business_outcome" | "human_required" | "failure";
 
 export type RunRecordInput = {
@@ -50,7 +50,7 @@ export function sanitizeRunRecord(value: unknown): RunRecordInput {
   if (!value || typeof value !== "object") throw new Error("Run record must be an object.");
   const input = value as Record<string, unknown>;
   if (typeof input.runId !== "string" || input.runId.length < 3 || input.runId.length > 100) throw new Error("Run id is invalid.");
-  if (!['discovery', 'replay', 'handoff'].includes(String(input.kind))) throw new Error("Run kind is invalid.");
+  if (!['discovery', 'replay', 'handoff', 'agent_invocation'].includes(String(input.kind))) throw new Error("Run kind is invalid.");
   if (!['success', 'business_outcome', 'human_required', 'failure'].includes(String(input.status))) throw new Error("Run status is invalid.");
   if (typeof input.artifactName !== "string" || typeof input.artifactVersion !== "string") throw new Error("Artifact identity is required.");
   if (!Array.isArray(input.evidence) || input.evidence.length > 100) throw new Error("Evidence is invalid.");

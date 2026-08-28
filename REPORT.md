@@ -2,7 +2,7 @@
 
 ## Architecture
 
-The system has eight seams: a goal-driven discovery engine, a provider boundary, a versioned capability contract, an exact-artifact approval registry, a pausable deterministic executor, a bounded recovery wrapper, a control-transfer state machine, and per-user durable run storage. Discovery compiles only a verified trace. Generated or restored artifacts enter `draft` and cannot replay until the signed-in reviewer approves their SHA-256 fingerprint. The bundled reviewed baseline remains executable. D1 stores sanitized approvals, artifacts, outcomes, surface snapshots, and encrypted evidence behind the authenticated Sites user id.
+The system has ten seams: a goal-driven discovery engine, a provider boundary, a versioned capability contract, an authenticated capability catalog, reviewed tenant profiles, an exact-artifact approval registry, a pausable deterministic executor, a bounded recovery wrapper, a control-transfer state machine, and per-user durable run storage. Discovery compiles only a verified trace. Generated or restored artifacts enter `draft` and cannot replay until the signed-in reviewer approves their SHA-256 fingerprint. The bundled reviewed baseline and its reviewed tenant variants remain executable. D1 stores sanitized approvals, artifacts, outcomes, surface snapshots, and encrypted evidence behind the authenticated Sites user id.
 
 The server provider uses the OpenAI Responses API with strict structured output and `store: false`. If no API key is configured, the client labels and uses a policy-equivalent simulator; other provider failures remain visible instead of silently becoming simulated success. The target and member data are local and synthetic.
 
@@ -20,7 +20,13 @@ Results distinguish success, business outcome, human-required intervention, reco
 
 ## Heterogeneity & multi-tenant
 
-`DiscoveryAdapter` and `SurfaceAdapter` isolate surface mechanics from planning and execution. A desktop or accessibility-tree adapter can implement the same contracts without changing artifacts or result handling. Tenant reuse should key capabilities by vendor product and version, with institution-specific configuration and small reviewed locator overrides.
+`DiscoveryAdapter` and `SurfaceAdapter` isolate surface mechanics from planning and execution. A desktop or accessibility-tree adapter can implement the same contracts without changing artifacts or result handling. The catalog keys the capability to `northstar-core-member-services@8` and resolves only static reviewed tenant profiles. The east-branch profile changes the entry point and two ordered locators while preserving inputs, outputs, policy, business outcomes, and checkpoint semantics.
+
+## Agent catalog & stability
+
+Authenticated agents can list the typed capability contract and request an invocation ticket by exact capability name, version, tenant variant, and typed inputs. The server resolves only reviewed variants and fingerprints the resulting artifact. The browser verifies that fingerprint before passing the artifact to the existing deterministic executor; the catalog does not introduce a second execution engine.
+
+The console can execute three live canaries against the selected variant. All clean successes classify as stable, any recovery or a two-of-three result requires review, and fewer than two successes is unstable. Every canary remains an encrypted, owner-scoped `agent_invocation` run in the audit trail.
 
 ## Escalation & handoff
 
@@ -36,4 +42,4 @@ The private Site supplies the stable authenticated user id used for record owner
 
 ## Cuts
 
-Phase 5 completes managed evidence encryption and bounded recovery without turning retry into an open-ended loop. The richer failure signal remains a redacted structured surface snapshot rather than a screenshot to avoid capturing regulated values. The private demo has one authenticated owner, so separate reviewer/operator identities and multi-party approval are not fabricated in client state; they require multiple real principals and server-managed role assignments. Agent-facing catalog invocation, tenant/vendor overrides, key-rotation automation, broader network/permission faults, and cross-device continuation remain deliberate cuts. Live model execution still requires a configured server-side API key; the safe simulator keeps the core runnable without one.
+Phase 6 completes agent-facing catalog invocation, reviewed vendor/tenant overrides, and live multi-run stability scoring. The richer failure signal remains a redacted structured surface snapshot rather than a screenshot to avoid capturing regulated values. The private demo has one authenticated owner, so separate reviewer/operator identities and multi-party approval are not fabricated in client state; they require multiple real principals and server-managed role assignments. Short-lived signed tickets, catalog rate limiting, operational telemetry, key-rotation automation, broader network/permission faults, and cross-device continuation remain deliberate cuts. Live model execution still requires a configured server-side API key; the safe simulator keeps the core runnable without one.

@@ -30,12 +30,14 @@ import {
 } from "@/lib/discovery/core";
 import { createAdaptiveDiscoveryProvider } from "@/lib/discovery/provider-client";
 import { INITIAL_HANDOFF_STATE, transitionHandoff, type HandoffState } from "@/lib/handoff/core";
-import type { ArtifactReview, RunRecord, RunRecordInput } from "@/lib/persistence/contracts";
+import type { CapabilityCatalogEntry, InvocationTicket } from "@/lib/automation/catalog";
+import { scoreStability, type StabilityRun, type StabilityScore } from "@/lib/automation/stability";
+import { capabilityFingerprint, type ArtifactReview, type RunRecord, type RunRecordInput } from "@/lib/persistence/contracts";
 
 const savedCapability = validateCapability(rawCapability);
 const pause = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
-type Mode = "discover" | "replay" | "handoff";
+type Mode = "discover" | "replay" | "handoff" | "catalog";
 type RunStatus = "idle" | "running" | ReplayResult["status"];
 type DiscoveryStatus = "idle" | "running" | DiscoveryResult["status"];
 type LogEntry = { time: string; step: string; detail: string; state: "ok" | "warn" | "error"; provider?: string };
@@ -93,8 +95,11 @@ async function reloadFrame(frame: HTMLIFrameElement, entryPoint: string, run: nu
       };
       checkReady();
     };
-    const fault = faultMode === "none" ? "" : `&fault=${faultMode}`;
-    frame.src = `${entryPoint}?embedded=1&run=${run}${fault}`;
+    const target = new URL(entryPoint, window.location.origin);
+    target.searchParams.set("embedded", "1");
+    target.searchParams.set("run", String(run));
+    if (faultMode !== "none") target.searchParams.set("fault", faultMode);
+    frame.src = `${target.pathname}${target.search}`;
   });
 }
 
@@ -247,9 +252,17 @@ export default function Home() {
   const [faultMode, setFaultMode] = useState<FaultMode>("none");
   const [artifactReview, setArtifactReview] = useState<ArtifactReview | null>(null);
   const [recoveryStatus, setRecoveryStatus] = useState<{ attempts: number; recovered: boolean } | null>(null);
+  const [catalog, setCatalog] = useState<CapabilityCatalogEntry[]>([]);
+  const [catalogState, setCatalogState] = useState<"loading" | "ready" | "unavailable">("loading");
+  const [selectedVariant, setSelectedVariant] = useState("northstar-main");
+  const [agentStatus, setAgentStatus] = useState<RunStatus>("idle");
+  const [agentLogs, setAgentLogs] = useState<LogEntry[]>([]);
+  const [agentResult, setAgentResult] = useState<ReplayResult | null>(null);
+  const [activeTicket, setActiveTicket] = useState<InvocationTicket | null>(null);
+  const [stability, setStability] = useState<StabilityScore | null>(null);
   const activeArtifact = useMemo(() => generatedArtifact ?? savedCapability, [generatedArtifact]);
   const artifactApproved = !generatedArtifact || artifactReview?.state === "approved";
-  const busy = discoveryStatus === "running" || runStatus === "running" || handoff.owner === "resuming";
+  const busy = discoveryStatus === "running" || runStatus === "running" || agentStatus === "running" || handoff.owner === "resuming";
 
   async function loadHistory() {
     try {
@@ -259,8 +272,17 @@ export default function Home() {
       setHistory(body.runs); setStorageState("ready");
     } catch { setStorageState("unavailable"); }
   }
+
+  async function loadCatalog() {
+    try {
+      const response = await fetch("/api/capabilities", { cache: "no-store" });
+      if (!response.ok) throw new Error("catalog unavailable");
+      const body = await response.json() as { entries: CapabilityCatalogEntry[] };
+      setCatalog(body.entries); setCatalogState("ready");
+    } catch { setCatalogState("unavailable"); }
+  }
   useEffect(() => {
-    const timer = window.setTimeout(() => void loadHistory(), 0);
+    const timer = window.setTimeout(() => { void loadHistory(); void loadCatalog(); }, 0);
     return () => { window.clearTimeout(timer); stopHumanCaptureRef.current?.(); };
   }, []);
 
@@ -311,6 +333,82 @@ export default function Home() {
     if (result.status !== "human_required") await persistRun({ runId: result.runId, kind: "replay", status: result.status, artifactName: activeArtifact.name, artifactVersion: activeArtifact.version, summary: { eventCount: result.evidence.length, outcome: result.status, attempts: execution.attempts, recovered: execution.recovered }, evidence: result.evidence, artifact: activeArtifact });
   }
 
+  async function requestInvocationTicket(): Promise<InvocationTicket> {
+    const response = await fetch("/api/capabilities", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ capabilityName: savedCapability.name, version: savedCapability.version, variantId: selectedVariant, inputs: { memberId } }),
+    });
+    if (!response.ok) throw new AutomationError("invocation_rejected", "invalid_request", "The catalog rejected this invocation.");
+    const body = await response.json() as { ticket: InvocationTicket };
+    if (await capabilityFingerprint(body.ticket.artifact) !== body.ticket.artifactHash) {
+      throw new AutomationError("ticket_integrity_failed", "policy_denied", "The invocation artifact does not match its catalog fingerprint.");
+    }
+    return body.ticket;
+  }
+
+  async function executeAgentTicket(ticket: InvocationTicket, runLabel: string): Promise<{ result: ReplayResult; stabilityRun: StabilityRun }> {
+    const frame = frameRef.current;
+    if (!frame) throw new AutomationError("target_unavailable", "recoverable", "The target application is not available.", true);
+    const execution = await executeCapabilityWithRecovery({
+      artifact: ticket.artifact,
+      inputs: ticket.inputs,
+      origin: window.location.origin,
+      runId: ticket.invocationId,
+      createAdapter: () => createReplayAdapter(frame, () => ++runCounterRef.current),
+      maxAttempts: 2,
+      onEvidence: (evidence) => setAgentLogs((items) => [...items, { ...toReplayLog(evidence), step: `${runLabel} · ${toReplayLog(evidence).step}` }]),
+    });
+    const result = execution.result;
+    await persistRun({
+      runId: result.runId,
+      kind: "agent_invocation",
+      status: result.status,
+      artifactName: ticket.capabilityName,
+      artifactVersion: ticket.capabilityVersion,
+      provider: `catalog:${ticket.variant.id}`,
+      summary: { outcome: result.status, attempts: execution.attempts, recovered: execution.recovered, variantId: ticket.variant.id, vendorFamily: ticket.variant.vendorFamily },
+      evidence: result.evidence,
+      artifact: ticket.artifact,
+    });
+    return { result, stabilityRun: { status: result.status, attempts: execution.attempts, recovered: execution.recovered } };
+  }
+
+  async function invokeFromCatalog() {
+    if (busy || memberId.length !== 5) return;
+    setAgentStatus("running"); setAgentLogs([]); setAgentResult(null); setStability(null);
+    try {
+      const ticket = await requestInvocationTicket();
+      setActiveTicket(ticket);
+      const executed = await executeAgentTicket(ticket, "invoke");
+      setAgentResult(executed.result); setAgentStatus(executed.result.status);
+    } catch {
+      setAgentStatus("failure");
+      setAgentResult({ runId: crypto.randomUUID(), status: "failure", error: { category: "invalid_request", code: "invocation_rejected", stepId: "catalog", message: "The catalog invocation could not be issued.", retryable: false }, evidence: [] });
+    }
+  }
+
+  async function runStabilityCanary() {
+    if (busy || memberId.length !== 5) return;
+    setAgentStatus("running"); setAgentLogs([]); setAgentResult(null); setStability(null);
+    const runs: StabilityRun[] = [];
+    try {
+      for (let index = 1; index <= 3; index += 1) {
+        const ticket = await requestInvocationTicket();
+        setActiveTicket(ticket);
+        const executed = await executeAgentTicket(ticket, `canary ${index}`);
+        runs.push(executed.stabilityRun);
+        setAgentResult(executed.result);
+      }
+      const score = scoreStability(runs);
+      setStability(score);
+      setAgentStatus(runs.at(-1)?.status ?? "failure");
+    } catch {
+      const score = scoreStability([...runs, { status: "failure", attempts: 1, recovered: false }]);
+      setStability(score); setAgentStatus("failure");
+    }
+  }
+
   async function startHandoff() {
     const frame = frameRef.current; if (!frame || busy) return;
     if (!artifactApproved || (generatedArtifact && (await registerArtifact(generatedArtifact))?.state !== "approved")) return;
@@ -352,24 +450,27 @@ export default function Home() {
     if (response.ok) await loadHistory();
   }
 
-  const activeLogs = mode === "discover" ? discoveryLogs : replayLogs;
-  const activeStatus = mode === "discover" ? discoveryStatus : mode === "handoff" && handoff.owner !== "automation" ? handoff.owner : runStatus;
+  const activeLogs = mode === "discover" ? discoveryLogs : mode === "catalog" ? agentLogs : replayLogs;
+  const activeStatus = mode === "discover" ? discoveryStatus : mode === "catalog" ? agentStatus : mode === "handoff" && handoff.owner !== "automation" ? handoff.owner : runStatus;
+  const catalogEntry = catalog[0];
+  const catalogVariant = catalogEntry?.variants.find((variant) => variant.id === selectedVariant);
 
   return <main className="console-shell">
     <header className="topbar"><div className="brand-lockup"><span className="brand-mark">NC</span><div><p className="eyebrow">Northstar Automation Lab</p><h1>Computer-Use Control Plane</h1></div></div><div className="environment-badge"><span /> Protected demo</div></header>
 
-    <section className="overview-grid phase-two-overview"><div><p className="section-kicker">Phase 5 · Encrypted recovery</p><h2>Recover once, prove every step, encrypt the evidence.</h2><p className="lede">Retryable failures receive one policy-bounded deterministic restart. Hosted evidence is encrypted with AES-256-GCM while its independent integrity fingerprint remains verifiable.</p></div><dl className="capability-facts"><div><dt>Recovery budget</dt><dd>1 retry maximum</dd></div><div><dt>Encryption</dt><dd>AES-256-GCM</dd></div><div><dt>Integrity</dt><dd>SHA-256 + AAD</dd></div><div><dt>Hard failures</dt><dd>Never retried</dd></div></dl></section>
+    <section className="overview-grid phase-two-overview"><div><p className="section-kicker">Phase 6 · Agent capability service</p><h2>Discover once, invoke by contract, measure stability.</h2><p className="lede">Agents now receive a typed capability catalog and invocation ticket. Reviewed tenant variants adapt the target while the same deterministic executor and evidence policy stay in force.</p></div><dl className="capability-facts"><div><dt>Agent contract</dt><dd>Typed catalog API</dd></div><div><dt>Tenant variants</dt><dd>2 reviewed profiles</dd></div><div><dt>Stability window</dt><dd>3 live canaries</dd></div><div><dt>Execution</dt><dd>Deterministic only</dd></div></dl></section>
 
     <nav className="mode-switch" aria-label="Automation mode">
       <button className={mode === "discover" ? "active" : ""} onClick={() => setMode("discover")} disabled={busy}><span>01</span> Discover</button>
       <button className={mode === "replay" ? "active" : ""} onClick={() => setMode("replay")} disabled={busy}><span>02</span> Replay</button>
       <button className={mode === "handoff" ? "active" : ""} onClick={() => setMode("handoff")} disabled={busy}><span>03</span> Human handoff</button>
+      <button className={mode === "catalog" ? "active" : ""} onClick={() => setMode("catalog")} disabled={busy}><span>04</span> Agent API</button>
     </nav>
 
     <section className="workspace-grid">
       <div className="panel target-panel"><div className="panel-heading"><div><span className="panel-number">LIVE</span><h3>Target session</h3></div><a href="/legacy" target="_blank" rel="noreferrer">Open manually ↗</a></div><div className={`ownership-strip ${handoff.owner}`}><span>Control</span><strong>{mode === "handoff" ? handoff.owner.replace("_", " ") : "automation"}</strong><small>Same session retained</small></div><div className="browser-frame"><div className="browser-bar"><span /><span /><span /><div className="address-bar">allowlisted / legacy / member-services</div></div><iframe ref={frameRef} title="Legacy credit union member portal" src="/legacy?embedded=1" /></div></div>
 
-      <aside className="panel run-panel"><div className="panel-heading"><div><span className="panel-number">{mode === "discover" ? "AI" : mode === "replay" ? "DET" : "HITL"}</span><h3>{mode === "discover" ? "Goal-driven discovery" : mode === "replay" ? "Deterministic replay" : "Intervention control"}</h3></div><span className={`status-pill ${activeStatus}`}>{String(activeStatus).replace("_", " ")}</span></div>
+      <aside className="panel run-panel"><div className="panel-heading"><div><span className="panel-number">{mode === "discover" ? "AI" : mode === "replay" ? "DET" : mode === "handoff" ? "HITL" : "API"}</span><h3>{mode === "discover" ? "Goal-driven discovery" : mode === "replay" ? "Deterministic replay" : mode === "handoff" ? "Intervention control" : "Agent capability catalog"}</h3></div><span className={`status-pill ${activeStatus}`}>{String(activeStatus).replace("_", " ")}</span></div>
 
         {mode === "discover" && <><form onSubmit={discover} className="run-form discovery-form"><label htmlFor="goal">Goal</label><textarea id="goal" value={goal} onChange={(event) => setGoal(event.target.value.slice(0, 500))} required minLength={12} maxLength={500} /><label htmlFor="discovery-member-id">Invocation input</label><div className="input-row"><input id="discovery-member-id" value={memberId} onChange={(event) => setMemberId(event.target.value.replace(/\D/g, "").slice(0, 5))} inputMode="numeric" required pattern="[0-9]{5}" /><button type="submit" disabled={busy || memberId.length !== 5}>{discoveryStatus === "running" ? "Discovering…" : "Discover capability"}</button></div><p>Use <button type="button" className="inline-button" onClick={() => setMemberId("12345")}>12345</button> for success. Sensitive values stay local.</p></form><div className="result-card discovery-result" aria-live="polite"><p className="result-label">Discovery result</p>{!discoveryResult && <p className="empty-result">Submit a goal to start the constrained loop.</p>}{discoveryResult?.status === "success" && <div className="success-result"><strong>{discoveryResult.artifact.name}</strong><span>{discoveryResult.artifact.steps.length} actions · {discoveryResult.provider}</span><div className="result-actions"><button onClick={useGeneratedArtifact}>Replay generated artifact</button><button className="secondary" onClick={() => downloadJson(`${discoveryResult.artifact.name}.json`, discoveryResult.artifact)}>Download JSON</button></div></div>}{discoveryResult?.status === "business_outcome" && <div className="outcome-result"><strong>{discoveryResult.code}</strong><span>{discoveryResult.message}</span></div>}{discoveryResult?.status === "failure" && <div className="failure-result"><strong>{discoveryResult.error.code}</strong><span>Step {discoveryResult.error.step} · {discoveryResult.error.message}</span></div>}</div></>}
 
@@ -383,7 +484,15 @@ export default function Home() {
           {handoff.owner === "completed" && <><div className="handoff-complete"><span className="route-badge complete">Handoff complete</span><h4>Automation resumed successfully</h4><p>The same session reached its checkpoint after {handoff.actions.length} recorded human action.</p><button onClick={() => { setHandoff(INITIAL_HANDOFF_STATE); setReplayResult(null); setReplayLogs([]); setRunStatus("idle"); }}>Run again</button></div><ResultCard result={replayResult} /></>}
         </div>}
 
-        <div className="log-header"><span>{mode === "discover" ? "Discovery evidence" : mode === "handoff" ? "Handoff evidence" : "Replay evidence"}</span><span>{activeLogs.length} events</span></div><ol className="event-log phase-two-log">{activeLogs.length === 0 && <li className="log-empty">No evidence yet.</li>}{activeLogs.map((log, index) => <li key={`${log.time}-${index}`} className={log.state}><span className="log-marker" /><div><strong>{log.step}</strong><p>{log.detail}</p>{log.provider && <small>{log.provider}</small>}</div><time>{log.time}</time></li>)}</ol>
+        {mode === "catalog" && <div className="catalog-console">
+          <div className="catalog-contract"><div><span className={`catalog-state ${catalogState}`}>{catalogState}</span><p className="result-label">GET /api/capabilities</p></div><h4>{catalogEntry?.name ?? "Capability catalog"}</h4><p>{catalogEntry?.description ?? "Loading the authenticated agent-facing contract…"}</p>{catalogEntry && <dl><div><dt>Version</dt><dd>{catalogEntry.version}</dd></div><div><dt>Risk</dt><dd>{catalogEntry.risk.replace("_", " ")}</dd></div><div><dt>Input</dt><dd>memberId · string</dd></div><div><dt>Outputs</dt><dd>{Object.keys(catalogEntry.outputs).join(", ")}</dd></div></dl>}</div>
+          <div className="catalog-controls"><label htmlFor="catalog-variant">Reviewed tenant variant</label><select id="catalog-variant" className="policy-select" value={selectedVariant} onChange={(event) => setSelectedVariant(event.target.value)} disabled={busy || catalogState !== "ready"}>{catalogEntry?.variants.map((variant) => <option key={variant.id} value={variant.id}>{variant.label}</option>)}</select><div className="variant-facts"><span>{catalogVariant?.vendorFamily ?? "vendor family pending"}</span><strong>{catalogVariant?.entryPoint ?? "—"}</strong><small>{catalogVariant?.reviewState ?? "unavailable"} override</small></div><label htmlFor="catalog-member-id">Typed invocation input</label><input id="catalog-member-id" value={memberId} onChange={(event) => setMemberId(event.target.value.replace(/\D/g, "").slice(0, 5))} inputMode="numeric" required pattern="[0-9]{5}" /><div className="catalog-actions"><button onClick={() => void invokeFromCatalog()} disabled={busy || catalogState !== "ready" || memberId.length !== 5}>Invoke capability</button><button className="secondary" onClick={() => void runStabilityCanary()} disabled={busy || catalogState !== "ready" || memberId.length !== 5}>Run 3-canary score</button></div></div>
+          {activeTicket && <div className="ticket-card"><span>Invocation ticket</span><strong>{activeTicket.invocationId.slice(0, 13)}…</strong><small>{activeTicket.variant.id} · {activeTicket.capabilityName}@{activeTicket.capabilityVersion} · hash {activeTicket.artifactHash.slice(0, 10)}</small></div>}
+          <ResultCard result={agentResult} />
+          {stability && <div className={`stability-card ${stability.label}`}><div><span>Multi-run stability</span><strong>{stability.label.replace("_", " ")}</strong></div><b>{Math.round(stability.successRate * 100)}%</b><small>{stability.successfulRuns}/{stability.totalRuns} successful · {stability.recoveredRuns} recovered</small></div>}
+        </div>}
+
+        <div className="log-header"><span>{mode === "discover" ? "Discovery evidence" : mode === "handoff" ? "Handoff evidence" : mode === "catalog" ? "Agent invocation evidence" : "Replay evidence"}</span><span>{activeLogs.length} events</span></div><ol className="event-log phase-two-log">{activeLogs.length === 0 && <li className="log-empty">No evidence yet.</li>}{activeLogs.map((log, index) => <li key={`${log.time}-${index}`} className={log.state}><span className="log-marker" /><div><strong>{log.step}</strong><p>{log.detail}</p>{log.provider && <small>{log.provider}</small>}</div><time>{log.time}</time></li>)}</ol>
       </aside>
     </section>
 
