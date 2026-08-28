@@ -91,7 +91,15 @@ export async function ensureRunStore(database: D1Database) {
     database.prepare("CREATE TABLE IF NOT EXISTS user_roles (subject_id TEXT PRIMARY KEY NOT NULL, role TEXT NOT NULL, assigned_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"),
     database.prepare("CREATE TABLE IF NOT EXISTS alert_outbox (id TEXT PRIMARY KEY NOT NULL, owner_id TEXT NOT NULL, alert_code TEXT NOT NULL, severity TEXT NOT NULL, status TEXT NOT NULL, attempts INTEGER NOT NULL, next_attempt_at TEXT NOT NULL, last_error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"),
     database.prepare("CREATE INDEX IF NOT EXISTS idx_alert_outbox_status_next ON alert_outbox(status, next_attempt_at)"),
+    database.prepare("CREATE TABLE IF NOT EXISTS approval_requests (id TEXT PRIMARY KEY NOT NULL, submitted_by TEXT NOT NULL, artifact_name TEXT NOT NULL, artifact_version TEXT NOT NULL, artifact_json TEXT NOT NULL, risk_class TEXT NOT NULL, required_approvals INTEGER NOT NULL, state TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, reviewed_at TEXT)"),
+    database.prepare("CREATE INDEX IF NOT EXISTS idx_approval_requests_state_created ON approval_requests(state, created_at DESC)"),
+    database.prepare("CREATE TABLE IF NOT EXISTS approval_decisions (id TEXT PRIMARY KEY NOT NULL, request_id TEXT NOT NULL, reviewer_id TEXT NOT NULL, decision TEXT NOT NULL, created_at TEXT NOT NULL)"),
+    database.prepare("CREATE INDEX IF NOT EXISTS idx_approval_decisions_request_decision ON approval_decisions(request_id, decision)"),
   ]);
+  await database.prepare(`INSERT OR IGNORE INTO approval_requests (id, submitted_by, artifact_name, artifact_version, artifact_json, risk_class, required_approvals, state, created_at, updated_at, reviewed_at)
+    SELECT artifact_hash, owner_id, artifact_name, artifact_version, artifact_json, 'read_only', 1, state, created_at, COALESCE(reviewed_at, created_at), reviewed_at FROM artifact_reviews`).run();
+  await database.prepare(`INSERT OR IGNORE INTO approval_decisions (id, request_id, reviewer_id, decision, created_at)
+    SELECT artifact_hash || ':' || owner_id, artifact_hash, owner_id, 'approve', COALESCE(reviewed_at, created_at) FROM artifact_reviews WHERE state = 'approved'`).run();
   await database.prepare("PRAGMA optimize").run();
 
   // Local Miniflare databases can predate the checked-in migration. Keep the

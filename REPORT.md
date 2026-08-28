@@ -52,6 +52,8 @@ Authorization is resolved on the server from the authenticated Site principal. A
 
 A protected control tick requeues expired job leases, deduplicates waiting-intervention alerts into a durable outbox, and drains due entries in bounded batches. Webhook requests sign the exact JSON body with HMAC-SHA-256. Delivery failures retain the alert and apply exponential backoff up to one hour. External delivery remains dormant when a destination is not configured.
 
+Approval is capability-fingerprint scoped rather than browser-state scoped. Read-only artifacts need one reviewer so the focused demo stays operable. Artifacts marked irreversible or requiring human approval need two distinct reviewer decisions, and the submitting principal cannot vote. Approval and rejection decisions are durable, replaceable by the same reviewer, and recompute the request state; any rejection blocks unattended replay. This adds real separation of duties without pretending the current owner-only Site already has multiple people.
+
 ## Durable jobs & cross-device recovery
 
 Jobs persist encrypted typed inputs, canonical artifact identity, status, lease, and redacted result metadata in D1. A browser worker claims a job for three minutes, receives a fresh signed ticket, verifies it through the existing catalog boundary, and uses the same deterministic executor. Expired leases are reclaimable.
@@ -62,4 +64,4 @@ Operational alerts are derived from stored state rather than client counters: lo
 
 ## Cuts
 
-Phase 9 completes server-enforced roles, lease-recovery control ticks, and a durable signed webhook outbox. The private demo still has one granted Site owner, and no external webhook or platform scheduler destination was provided, so those integrations are intentionally configuration-gated. Multi-party approval, fully unattended browser execution, and broader network faults remain deliberate cuts.
+Phase 10 completes a durable reviewer queue, risk-derived quorum, and submitter/reviewer separation for risky artifacts. The private demo still has one granted Site owner, so a real two-person vote cannot be demonstrated until another authenticated Site visitor is granted. No external webhook or platform scheduler destination was provided, so those integrations remain configuration-gated. Fully unattended browser execution and broader network faults remain deliberate cuts.

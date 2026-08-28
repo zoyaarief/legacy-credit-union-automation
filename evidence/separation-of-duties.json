@@ -1,0 +1,19 @@
+{
+  "phase": 10,
+  "scope": "capability fingerprint",
+  "policies": [
+    {
+      "risk": "read_only",
+      "requiredApprovals": 1,
+      "submitterMayApprove": true
+    },
+    {
+      "risk": "irreversible_or_human_approval_required",
+      "requiredApprovals": 2,
+      "submitterMayApprove": false
+    }
+  ],
+  "decisionStates": ["draft", "pending", "approved", "rejected"],
+  "durableTables": ["approval_requests", "approval_decisions"],
+  "rejectionPolicy": "any active rejection blocks unattended replay"
+}

@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { deliverAlert, signAlertPayload } from "../lib/alerts/delivery.ts";
+import { approvalPolicy, approvalState } from "../lib/auth/approvals.ts";
 import { can, configuredAdmins } from "../lib/auth/roles.ts";
+import rawCapability from "../capabilities/get-savings-balance.v1.json" with { type: "json" };
 
 test("configured administrators are normalized and role capabilities stay separated", () => {
   assert.deepEqual([...configuredAdmins(" user-a, user-b ,,user-a ")], ["user-a", "user-b"]);
@@ -12,6 +14,16 @@ test("configured administrators are normalized and role capabilities stay separa
   assert.equal(can("admin", "dispatch_alerts"), true);
   assert.equal(can("admin", "invoke_capabilities"), true);
   assert.equal(can("admin", "enqueue_jobs"), true);
+  assert.equal(can("agent", "submit_artifacts"), true);
+});
+
+test("approval quorum is derived from risk and rejects partial or negative decisions", () => {
+  assert.deepEqual(approvalPolicy(rawCapability), { riskClass: "read_only", requiredApprovals: 1, separationRequired: false });
+  assert.deepEqual(approvalPolicy({ ...rawCapability, policy: { ...rawCapability.policy, risk: "irreversible", requiresHumanApproval: true } }), { riskClass: "irreversible", requiredApprovals: 2, separationRequired: true });
+  assert.equal(approvalState(0, 0, 2), "draft");
+  assert.equal(approvalState(1, 0, 2), "pending");
+  assert.equal(approvalState(2, 0, 2), "approved");
+  assert.equal(approvalState(2, 1, 2), "rejected");
 });
 
 test("alert signatures are deterministic and payload-bound", async () => {

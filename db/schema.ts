@@ -81,3 +81,9 @@ export const userRoles = sqliteTable("user_roles", { subjectId: text("subject_id
 export const alertOutbox = sqliteTable("alert_outbox", {
   id: text("id").primaryKey(), ownerId: text("owner_id").notNull(), alertCode: text("alert_code").notNull(), severity: text("severity").notNull(), status: text("status").notNull(), attempts: integer("attempts").notNull(), nextAttemptAt: text("next_attempt_at").notNull(), lastError: text("last_error"), createdAt: text("created_at").notNull(), updatedAt: text("updated_at").notNull(),
 }, (table) => [index("idx_alert_outbox_status_next").on(table.status, table.nextAttemptAt)]);
+export const approvalRequests = sqliteTable("approval_requests", {
+  id: text("id").primaryKey(), submittedBy: text("submitted_by").notNull(), artifactName: text("artifact_name").notNull(), artifactVersion: text("artifact_version").notNull(), artifactJson: text("artifact_json").notNull(), riskClass: text("risk_class").notNull(), requiredApprovals: integer("required_approvals").notNull(), state: text("state").notNull(), createdAt: text("created_at").notNull(), updatedAt: text("updated_at").notNull(), reviewedAt: text("reviewed_at"),
+}, (table) => [index("idx_approval_requests_state_created").on(table.state, table.createdAt)]);
+export const approvalDecisions = sqliteTable("approval_decisions", {
+  id: text("id").primaryKey(), requestId: text("request_id").notNull(), reviewerId: text("reviewer_id").notNull(), decision: text("decision").notNull(), createdAt: text("created_at").notNull(),
+}, (table) => [index("idx_approval_decisions_request_decision").on(table.requestId, table.decision)]);

@@ -1,6 +1,6 @@
 # Legacy Credit Union Computer-Use Automation
 
-Phase 9 adds server-enforced administrator, reviewer, and operator roles plus a protected recovery tick and signed, retrying webhook alert delivery.
+Phase 10 adds durable, risk-based capability approvals with separation of duties, a reviewer queue, and administrator-managed team roles.
 
 ## What works
 
@@ -35,6 +35,10 @@ Phase 9 adds server-enforced administrator, reviewer, and operator roles plus a 
 - Reviewer-only artifact approval and operator-only durable job execution
 - Protected scheduler tick for expired-lease recovery and alert-outbox dispatch
 - HMAC-SHA-256 webhook delivery with deduplication and exponential retry
+- Risk-derived approval quorum: one reviewer for read-only work and two independent reviewers for risky work
+- Submitter self-approval blocked whenever separation of duties is required
+- Durable approve/reject decisions with fingerprint-bound reviewer progress
+- Reviewer queue and administrator role-assignment controls in the console
 - Unit coverage for replay, recovery, encryption, discovery, model validation, storage policy, artifact fingerprints, fault classification, and handoff transitions
 
 ## Run locally
@@ -105,4 +109,4 @@ pnpm run build
 
 ## Next phase
 
-Phase 10: connect a production webhook and scheduler provider, grant additional Site users, and add multi-party approval workflows.
+Phase 11: grant additional Site users, connect the production webhook and scheduler provider, and exercise the two-reviewer workflow with real principals.

@@ -30,8 +30,15 @@ export type ArtifactReview = {
   artifactHash: string;
   artifactName: string;
   artifactVersion: string;
-  state: "draft" | "approved";
+  state: "draft" | "pending" | "approved" | "rejected";
   operatorRole: "reviewer";
+  submittedBy: string;
+  riskClass: "read_only" | "reversible" | "irreversible";
+  requiredApprovals: number;
+  approvals: number;
+  rejections: number;
+  separationRequired: boolean;
+  canDecide: boolean;
   createdAt: string;
   reviewedAt: string | null;
 };
