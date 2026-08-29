@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { AutomationError, executeCapability, executeCapabilityWithRecovery, HumanInterventionError } from "../lib/automation/core.ts";
+import { sha256Fingerprint } from "../lib/security/fingerprint.ts";
 
 const artifactUrl = new URL("../capabilities/get-savings-balance.v1.json", import.meta.url);
 const artifact = JSON.parse(await readFile(artifactUrl, "utf8"));
@@ -32,6 +33,70 @@ test("executor returns declared outputs and verifies the checkpoint", async () =
   assert.deepEqual(result.outputs, { balance: "$2,458.17", accountStatus: "Active" });
   assert.equal(result.evidence.at(-1).stepId, "checkpoint");
   assert.equal(JSON.stringify(result.evidence).includes("12345"), false);
+});
+
+test("executor records the successful locator used for extraction", async () => {
+  const result = await executeCapability({
+    artifact,
+    inputs: { memberId: "12345" },
+    adapter: adapter({ extract: async (target) => ({ value: target.description.includes("balance") ? "$2,458.17" : "Active", locator: "css:.verified-output" }) }),
+    ...fixed,
+  });
+
+  assert.equal(result.status, "success");
+  assert.ok(result.evidence.some((event) => event.action === "extract" && event.detail.includes("css:.verified-output")));
+});
+
+test("risky execution requires a completed fingerprint-bound approval grant", async () => {
+  const riskyArtifact = structuredClone(artifact);
+  riskyArtifact.policy.risk = "irreversible";
+  riskyArtifact.policy.requiresHumanApproval = true;
+  let prepared = false;
+  const denied = await executeCapability({
+    artifact: riskyArtifact,
+    inputs: { memberId: "12345" },
+    adapter: adapter({ prepare: async () => { prepared = true; } }),
+    ...fixed,
+  });
+  assert.equal(denied.status, "failure");
+  assert.equal(denied.error.code, "approval_required");
+  assert.equal(prepared, false);
+
+  const insufficient = await executeCapability({
+    artifact: riskyArtifact,
+    inputs: { memberId: "12345" },
+    adapter: adapter(),
+    approvalGrant: { artifactHash: await sha256Fingerprint(riskyArtifact), state: "approved", approvals: 1, requiredApprovals: 1, rejections: 0, approvedAt: fixed.now() },
+    ...fixed,
+  });
+  assert.equal(insufficient.status, "failure");
+  assert.equal(insufficient.error.code, "approval_required");
+
+  const mismatched = await executeCapability({
+    artifact: riskyArtifact,
+    inputs: { memberId: "12345" },
+    adapter: adapter(),
+    approvalGrant: { artifactHash: "wrong", state: "approved", approvals: 2, requiredApprovals: 2, rejections: 0, approvedAt: fixed.now() },
+    ...fixed,
+  });
+  assert.equal(mismatched.status, "failure");
+  assert.equal(mismatched.error.code, "approval_fingerprint_mismatch");
+
+  const approved = await executeCapability({
+    artifact: riskyArtifact,
+    inputs: { memberId: "12345" },
+    adapter: adapter(),
+    approvalGrant: {
+      artifactHash: await sha256Fingerprint(riskyArtifact),
+      state: "approved",
+      approvals: 2,
+      requiredApprovals: 2,
+      rejections: 0,
+      approvedAt: fixed.now(),
+    },
+    ...fixed,
+  });
+  assert.equal(approved.status, "success");
 });
 
 test("executor returns a known business outcome without treating it as a crash", async () => {

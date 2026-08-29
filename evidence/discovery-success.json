@@ -1,21 +1,379 @@
 {
   "schemaVersion": "1.0",
   "scenario": "goal-driven savings lookup discovery",
-  "status": "success",
-  "provider": "safe-simulator",
+  "artifact": "get_savings_balance@1.1.0",
+  "generatedBy": "scripts/generate-evidence.mjs",
   "sensitiveValuesStored": false,
   "modelTranscriptStored": false,
-  "summary": {
-    "observations": 6,
-    "validatedActions": 5,
-    "checkpoint": "member_summary",
-    "compiledCapability": "get_savings_balance@1.0.0"
-  },
-  "actions": [
-    "type:member_number:<redacted>",
-    "click:retrieve_record",
-    "wait_for_outcome:success",
-    "extract:savings_balance->balance",
-    "extract:account_status->accountStatus"
-  ]
+  "result": {
+    "runId": "evidence-discovery-success",
+    "status": "success",
+    "provider": "safe-simulator",
+    "outputs": {
+      "balance": "$2,458.17",
+      "accountStatus": "Active"
+    },
+    "artifact": {
+      "schemaVersion": "1.0",
+      "name": "get_savings_balance",
+      "version": "1.1.0",
+      "description": "Discovered from goal: Look up member {{memberId}} and return the current savings balance and account status.",
+      "target": {
+        "surface": "web",
+        "application": "northstar-core-member-services",
+        "entryPoint": "/legacy",
+        "allowlist": {
+          "sameOrigin": true,
+          "pathPrefixes": [
+            "/legacy"
+          ]
+        }
+      },
+      "inputs": {
+        "memberId": {
+          "type": "string",
+          "required": true,
+          "pattern": "^[0-9]{5}$",
+          "sensitive": true
+        }
+      },
+      "outputs": {
+        "balance": {
+          "type": "currency",
+          "currency": "USD"
+        },
+        "accountStatus": {
+          "type": "string"
+        }
+      },
+      "policy": {
+        "allowedActions": [
+          "type",
+          "click",
+          "wait_for_outcome",
+          "extract"
+        ],
+        "risk": "read_only",
+        "maxSteps": 8,
+        "runTimeoutMs": 20000,
+        "requiresHumanApproval": false
+      },
+      "steps": [
+        {
+          "id": "step_1_type_member_id",
+          "action": "type",
+          "input": "memberId",
+          "target": {
+            "description": "Member Number input",
+            "locators": [
+              {
+                "kind": "name",
+                "value": "member_number"
+              },
+              {
+                "kind": "css",
+                "value": "input[maxlength='5']"
+              }
+            ]
+          }
+        },
+        {
+          "id": "step_2_submit_lookup",
+          "action": "click",
+          "target": {
+            "description": "Retrieve Record button",
+            "locators": [
+              {
+                "kind": "button_text",
+                "value": "Retrieve Record"
+              },
+              {
+                "kind": "css",
+                "value": "form button[type='submit']"
+              }
+            ]
+          }
+        },
+        {
+          "id": "step_3_wait_for_outcome",
+          "action": "wait_for_outcome",
+          "timeoutMs": 5000,
+          "outcomes": [
+            {
+              "kind": "success",
+              "target": {
+                "description": "Member summary panel",
+                "locators": [
+                  {
+                    "kind": "css",
+                    "value": "#member-summary"
+                  },
+                  {
+                    "kind": "css",
+                    "value": ".member-result"
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "business_outcome",
+              "code": "member_not_found",
+              "target": {
+                "description": "Member not found message",
+                "locators": [
+                  {
+                    "kind": "css",
+                    "value": "#not-found"
+                  },
+                  {
+                    "kind": "css",
+                    "value": ".legacy-message"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "id": "step_4_extract_balance",
+          "action": "extract",
+          "output": "balance",
+          "target": {
+            "description": "Regular savings current balance cell",
+            "locators": [
+              {
+                "kind": "css",
+                "value": ".accounts-grid tbody tr .savings-balance"
+              },
+              {
+                "kind": "css",
+                "value": "#member-summary .money"
+              }
+            ]
+          }
+        },
+        {
+          "id": "step_5_extract_accountStatus",
+          "action": "extract",
+          "output": "accountStatus",
+          "target": {
+            "description": "Regular savings status cell",
+            "locators": [
+              {
+                "kind": "css",
+                "value": ".accounts-grid tbody tr .account-status"
+              },
+              {
+                "kind": "css",
+                "value": "#member-summary .accounts-grid td:nth-child(4)"
+              }
+            ]
+          }
+        }
+      ],
+      "checkpoint": {
+        "kind": "element_visible",
+        "target": {
+          "description": "Member summary panel",
+          "locators": [
+            {
+              "kind": "css",
+              "value": "#member-summary"
+            },
+            {
+              "kind": "css",
+              "value": ".member-result"
+            }
+          ]
+        }
+      },
+      "businessOutcomes": [
+        {
+          "code": "member_not_found",
+          "message": "No member matched the supplied identifier.",
+          "retryable": false
+        }
+      ],
+      "discovery": {
+        "provider": "safe-simulator",
+        "generatedAt": "2026-08-29T14:00:18.000Z",
+        "storesModelTranscript": false
+      }
+    },
+    "evidence": [
+      {
+        "phase": "policy",
+        "step": 0,
+        "outcome": "ok",
+        "detail": "Goal, inputs, target route, action set, and read-only risk policy approved.",
+        "sequence": 1,
+        "at": "2026-08-29T14:00:00.000Z"
+      },
+      {
+        "phase": "observe",
+        "step": 1,
+        "outcome": "ok",
+        "detail": "Observed 2 policy-known controls; values remain local.",
+        "sequence": 2,
+        "at": "2026-08-29T14:00:01.000Z"
+      },
+      {
+        "phase": "decide",
+        "step": 1,
+        "outcome": "ok",
+        "detail": "The member lookup form requires the declared memberId input.",
+        "provider": "safe-simulator",
+        "sequence": 3,
+        "at": "2026-08-29T14:00:02.000Z"
+      },
+      {
+        "phase": "act",
+        "step": 1,
+        "outcome": "ok",
+        "detail": "Entered redacted memberId using name:member_number.",
+        "provider": "safe-simulator",
+        "sequence": 4,
+        "at": "2026-08-29T14:00:03.000Z"
+      },
+      {
+        "phase": "observe",
+        "step": 2,
+        "outcome": "ok",
+        "detail": "Observed 2 policy-known controls; values remain local.",
+        "sequence": 5,
+        "at": "2026-08-29T14:00:04.000Z"
+      },
+      {
+        "phase": "decide",
+        "step": 2,
+        "outcome": "ok",
+        "detail": "The lookup form is ready, so submit the member inquiry.",
+        "provider": "safe-simulator",
+        "sequence": 6,
+        "at": "2026-08-29T14:00:05.000Z"
+      },
+      {
+        "phase": "act",
+        "step": 2,
+        "outcome": "ok",
+        "detail": "Activated retrieve_record using button_text:Retrieve Record.",
+        "provider": "safe-simulator",
+        "sequence": 7,
+        "at": "2026-08-29T14:00:06.000Z"
+      },
+      {
+        "phase": "observe",
+        "step": 3,
+        "outcome": "ok",
+        "detail": "Observed 2 policy-known controls; values remain local.",
+        "sequence": 8,
+        "at": "2026-08-29T14:00:07.000Z"
+      },
+      {
+        "phase": "decide",
+        "step": 3,
+        "outcome": "ok",
+        "detail": "Wait for either the declared member summary or not-found outcome.",
+        "provider": "safe-simulator",
+        "sequence": 9,
+        "at": "2026-08-29T14:00:08.000Z"
+      },
+      {
+        "phase": "act",
+        "step": 3,
+        "outcome": "ok",
+        "detail": "Observed a declared successful member lookup outcome.",
+        "provider": "safe-simulator",
+        "sequence": 10,
+        "at": "2026-08-29T14:00:09.000Z"
+      },
+      {
+        "phase": "observe",
+        "step": 4,
+        "outcome": "ok",
+        "detail": "Observed 5 policy-known controls; values remain local.",
+        "sequence": 11,
+        "at": "2026-08-29T14:00:10.000Z"
+      },
+      {
+        "phase": "decide",
+        "step": 4,
+        "outcome": "ok",
+        "detail": "The member summary is visible; extract the declared savings balance locally.",
+        "provider": "safe-simulator",
+        "sequence": 12,
+        "at": "2026-08-29T14:00:11.000Z"
+      },
+      {
+        "phase": "act",
+        "step": 4,
+        "outcome": "ok",
+        "detail": "Extracted declared balance output locally using css:.accounts-grid tbody tr .savings-balance.",
+        "provider": "safe-simulator",
+        "sequence": 13,
+        "at": "2026-08-29T14:00:12.000Z"
+      },
+      {
+        "phase": "observe",
+        "step": 5,
+        "outcome": "ok",
+        "detail": "Observed 5 policy-known controls; values remain local.",
+        "sequence": 14,
+        "at": "2026-08-29T14:00:13.000Z"
+      },
+      {
+        "phase": "decide",
+        "step": 5,
+        "outcome": "ok",
+        "detail": "Extract the remaining declared account status locally.",
+        "provider": "safe-simulator",
+        "sequence": 15,
+        "at": "2026-08-29T14:00:14.000Z"
+      },
+      {
+        "phase": "act",
+        "step": 5,
+        "outcome": "ok",
+        "detail": "Extracted declared accountStatus output locally using css:.accounts-grid tbody tr .account-status.",
+        "provider": "safe-simulator",
+        "sequence": 16,
+        "at": "2026-08-29T14:00:15.000Z"
+      },
+      {
+        "phase": "observe",
+        "step": 6,
+        "outcome": "ok",
+        "detail": "Observed 5 policy-known controls; values remain local.",
+        "sequence": 17,
+        "at": "2026-08-29T14:00:16.000Z"
+      },
+      {
+        "phase": "decide",
+        "step": 6,
+        "outcome": "ok",
+        "detail": "Both outputs are present and the success checkpoint can now be verified.",
+        "provider": "safe-simulator",
+        "sequence": 18,
+        "at": "2026-08-29T14:00:17.000Z"
+      },
+      {
+        "phase": "compile",
+        "step": 6,
+        "outcome": "ok",
+        "detail": "Compiled and validated get_savings_balance@1.1.0 from 5 recorded actions.",
+        "provider": "safe-simulator",
+        "sequence": 19,
+        "at": "2026-08-29T14:00:19.000Z"
+      },
+      {
+        "phase": "complete",
+        "step": 6,
+        "outcome": "ok",
+        "detail": "Goal verified; capability artifact and declared outputs are ready.",
+        "provider": "safe-simulator",
+        "sequence": 20,
+        "at": "2026-08-29T14:00:20.000Z"
+      }
+    ]
+  }
 }

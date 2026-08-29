@@ -6,6 +6,7 @@ import {
   createSimulatedDiscoveryProvider,
   redactDiscoveryText,
   runDiscovery,
+  validateSupportedDiscoveryGoal,
   validateDiscoveryDecision,
 } from "../lib/discovery/core.ts";
 import { decideWithOpenAI } from "../lib/discovery/openai.ts";
@@ -67,9 +68,31 @@ test("goal-driven discovery completes and compiles a replayable artifact", async
   assert.equal(result.provider, "safe-simulator");
   assert.deepEqual(result.outputs, { balance: "$2,458.17", accountStatus: "Active" });
   assert.equal(result.artifact.name, "get_savings_balance");
+  assert.equal(result.artifact.version, "1.1.0");
   assert.equal(result.artifact.steps.length, 5);
   assert.equal(result.evidence.at(-1).phase, "complete");
   assert.equal(JSON.stringify(result).includes("12345"), false);
+});
+
+test("unsupported or mutating goals fail before the target is prepared", async () => {
+  let prepared = false;
+  const unsafeAdapter = discoveryAdapter();
+  unsafeAdapter.prepare = async () => { prepared = true; };
+  const result = await runDiscovery({
+    ...fixed,
+    goal: "Permanently close the member savings account and report its balance and status.",
+    provider: createSimulatedDiscoveryProvider(),
+    adapter: unsafeAdapter,
+  });
+
+  assert.equal(result.status, "failure");
+  assert.equal(result.error.code, "unsupported_goal");
+  assert.equal(result.error.category, undefined);
+  assert.equal(prepared, false);
+});
+
+test("supported-goal validation rejects unrelated read-only requests", () => {
+  assert.throws(() => validateSupportedDiscoveryGoal("Look up the member mailing address."), /supports only a read-only member savings balance/);
 });
 
 test("discovery reports not-found as a business outcome without compiling", async () => {
@@ -102,6 +125,27 @@ test("model decisions cannot select arbitrary controls", () => {
   assert.throws(
     () => validateDiscoveryDecision({ action: "click", targetId: "delete_member", input: null, output: null, reason: "Delete it", capabilityName: null }, context),
     /not allowed/,
+  );
+});
+
+test("model decisions cannot operate a disabled observed control", () => {
+  const context = {
+    goal: fixed.goal,
+    step: 2,
+    maxSteps: 8,
+    inputContract: { memberId: { type: "string", sensitive: true } },
+    outputContract: { balance: { type: "currency" }, accountStatus: { type: "string" } },
+    observation: {
+      url: "http://localhost:3000/legacy",
+      title: "Northstar",
+      controls: [{ id: "retrieve_record", role: "button", name: "Retrieve Record", visible: true, enabled: false }],
+    },
+    history: [],
+  };
+
+  assert.throws(
+    () => validateDiscoveryDecision({ action: "click", targetId: "retrieve_record", input: null, output: null, reason: "Submit lookup.", capabilityName: null }, context),
+    /visible but disabled/,
   );
 });
 

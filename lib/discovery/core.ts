@@ -153,7 +153,7 @@ type RecordedAction = {
 const DISCOVERY_POLICY_CAPABILITY: Capability = {
   schemaVersion: "1.0",
   name: "discovery_policy",
-  version: "1.0.0",
+  version: "1.1.0",
   description: "Policy envelope for discovery against the Northstar member-services surface.",
   target: {
     surface: "web",
@@ -232,8 +232,11 @@ export function validateDiscoveryDecision(decision: unknown, context: DecisionCo
     throw new AutomationError("policy_denied", "policy_denied", "The model referenced an undeclared output.");
   }
   if (["type", "click", "extract", "complete"].includes(action)) {
-    const visible = context.observation.controls.some((control) => control.id === targetId && control.visible);
-    if (!visible) throw new AutomationError("target_not_observed", "hard_failure", `${targetId} is not visible in the current observation.`);
+    const control = context.observation.controls.find((candidate) => candidate.id === targetId && candidate.visible);
+    if (!control) throw new AutomationError("target_not_observed", "hard_failure", `${targetId} is not visible in the current observation.`);
+    if (["type", "click"].includes(action) && control.enabled === false) {
+      throw new AutomationError("target_not_interactable", "hard_failure", `${targetId} is visible but disabled.`);
+    }
   }
   return { action, targetId, input, output, reason: redactDiscoveryText(candidate.reason), capabilityName };
 }
@@ -247,6 +250,27 @@ function validateDiscoveryInputs(inputs: Record<string, unknown>): Record<string
     throw new AutomationError("invalid_input", "invalid_request", "Discovery received an undeclared input.");
   }
   return { memberId };
+}
+
+const MUTATING_GOAL_TERMS = /\b(close|delete|remove|transfer|withdraw|deposit|freeze|unfreeze|block|unblock|update|change|edit|open|create|approve|deny|decline)\b/i;
+
+export function validateSupportedDiscoveryGoal(goal: string): string {
+  if (typeof goal !== "string" || goal.trim().length < 12 || goal.length > 500) {
+    throw new AutomationError("invalid_goal", "invalid_request", "Goal must be between 12 and 500 characters.");
+  }
+  const normalized = goal.trim();
+  const requestsSupportedOutputs = /\b(member|memberId)\b/i.test(normalized)
+    && /\bsavings?\b/i.test(normalized)
+    && /\bbalance\b/i.test(normalized)
+    && /\bstatus\b/i.test(normalized);
+  if (MUTATING_GOAL_TERMS.test(normalized) || !requestsSupportedOutputs) {
+    throw new AutomationError(
+      "unsupported_goal",
+      "invalid_request",
+      "This discovery policy supports only a read-only member savings balance and account-status lookup.",
+    );
+  }
+  return redactDiscoveryText(normalized);
 }
 
 function sanitizeCapabilityName(value: string | null): string {
@@ -269,7 +293,7 @@ export function compileDiscoveredCapability(options: {
   const artifact = {
     schemaVersion: "1.0",
     name: sanitizeCapabilityName(options.capabilityName),
-    version: "1.0.0",
+    version: "1.1.0",
     description: `Discovered from goal: ${redactDiscoveryText(options.goal)}`,
     target: DISCOVERY_POLICY_CAPABILITY.target,
     inputs: DISCOVERY_POLICY_CAPABILITY.inputs,
@@ -329,11 +353,8 @@ export async function runDiscovery(options: {
   };
 
   try {
-    if (typeof options.goal !== "string" || options.goal.trim().length < 12 || options.goal.length > 500) {
-      throw new AutomationError("invalid_goal", "invalid_request", "Goal must be between 12 and 500 characters.");
-    }
+    const safeGoal = validateSupportedDiscoveryGoal(options.goal);
     const inputs = validateDiscoveryInputs(options.inputs);
-    const safeGoal = redactDiscoveryText(options.goal.trim());
     if (!isAllowedTargetUrl(DISCOVERY_POLICY_CAPABILITY.target.entryPoint, options.origin, DISCOVERY_POLICY_CAPABILITY)) {
       throw new AutomationError("policy_denied", "policy_denied", "Discovery entry point is outside the route allowlist.");
     }
@@ -400,7 +421,7 @@ export async function runDiscovery(options: {
       const detail = decision.action === "type"
         ? `Entered redacted ${decision.input} using ${result.locator}.`
         : decision.action === "extract"
-          ? `Extracted declared ${decision.output} output locally.`
+          ? `Extracted declared ${decision.output} output locally${result.locator ? ` using ${result.locator}` : ""}.`
           : decision.action === "wait_for_outcome"
             ? "Observed a declared successful member lookup outcome."
             : `Activated ${decision.targetId} using ${result.locator}.`;

@@ -1,3 +1,5 @@
+import { sha256Fingerprint } from "../security/fingerprint.ts";
+
 export type Locator = {
   kind: "name" | "css" | "button_text";
   value: string;
@@ -84,6 +86,15 @@ export type ReplayResume = {
   evidence: EvidenceEvent[];
 };
 
+export type ApprovalGrant = {
+  artifactHash: string;
+  state: "approved";
+  approvals: number;
+  requiredApprovals: number;
+  rejections: number;
+  approvedAt: string;
+};
+
 export type FailureCategory = "invalid_request" | "policy_denied" | "recoverable" | "hard_failure";
 
 export type ReplayResult =
@@ -109,7 +120,7 @@ export type SurfaceAdapter = {
   type(target: ControlTarget, value: string): Promise<string>;
   click(target: ControlTarget): Promise<string>;
   waitForOutcome(outcomes: OutcomeDefinition[], timeoutMs: number): Promise<OutcomeDefinition>;
-  extract(target: ControlTarget): Promise<string>;
+  extract(target: ControlTarget): Promise<string | { value: string; locator: string }>;
   verify(target: ControlTarget): Promise<boolean>;
 };
 
@@ -268,6 +279,7 @@ export async function executeCapability(options: {
   onEvidence?: (event: EvidenceEvent) => void;
   resume?: ReplayResume;
   humanActions?: HumanAction[];
+  approvalGrant?: ApprovalGrant;
 }): Promise<ReplayResult> {
   const runId = options.resume?.runId ?? options.runId ?? crypto.randomUUID();
   const now = options.now ?? (() => new Date().toISOString());
@@ -290,6 +302,26 @@ export async function executeCapability(options: {
     }
     if (capability.policy.risk === "irreversible" && !capability.policy.requiresHumanApproval) {
       throw new AutomationError("approval_required", "policy_denied", "Irreversible capabilities must require human approval.");
+    }
+    if (capability.policy.requiresHumanApproval || capability.policy.risk === "irreversible") {
+      const grant = options.approvalGrant;
+      if (
+        !grant
+        || grant.state !== "approved"
+        || !Number.isInteger(grant.approvals)
+        || !Number.isInteger(grant.requiredApprovals)
+        || grant.requiredApprovals < 2
+        || grant.approvals < grant.requiredApprovals
+        || grant.rejections !== 0
+      ) {
+        throw new AutomationError("approval_required", "policy_denied", "This capability does not have a completed approval grant.");
+      }
+      if (!grant.approvedAt || !Number.isFinite(Date.parse(grant.approvedAt))) {
+        throw new AutomationError("approval_invalid", "policy_denied", "The approval grant timestamp is invalid.");
+      }
+      if (await sha256Fingerprint(capability) !== grant.artifactHash) {
+        throw new AutomationError("approval_fingerprint_mismatch", "policy_denied", "The approval grant does not match this capability artifact.");
+      }
     }
     if (!options.resume) {
       record({ stepId: "policy", action: "policy_check", outcome: "ok", detail: "Artifact, inputs, action allowlist, risk policy, and target path approved." });
@@ -335,11 +367,13 @@ export async function executeCapability(options: {
         }
         record({ stepId: step.id, action: step.action, outcome: "ok", detail: `Observed ${observed.target.description}.` });
       } else {
-        const value = await options.adapter.extract(step.target);
+        const extracted = await options.adapter.extract(step.target);
+        const value = typeof extracted === "string" ? extracted : extracted.value;
+        const locator = typeof extracted === "string" ? null : extracted.locator;
         if (!value) throw new AutomationError("output_missing", "hard_failure", `Declared output ${step.output} was empty.`);
         outputs[step.output] = value;
         resumeOutputs = outputs;
-        record({ stepId: step.id, action: step.action, outcome: "ok", detail: `Extracted declared ${step.output} output.` });
+        record({ stepId: step.id, action: step.action, outcome: "ok", detail: `Extracted declared ${step.output} output${locator ? ` using ${locator}` : ""}.` });
       }
 
       if (!isAllowedTargetUrl(options.adapter.currentUrl(), options.origin, capability)) {
@@ -409,6 +443,7 @@ export async function executeCapabilityWithRecovery(options: {
   onEvidence?: (event: EvidenceEvent) => void;
   maxAttempts?: number;
   retryableCodes?: string[];
+  approvalGrant?: ApprovalGrant;
 }): Promise<RecoveryExecution> {
   const runId = options.runId ?? crypto.randomUUID();
   const now = options.now ?? (() => new Date().toISOString());
@@ -425,6 +460,7 @@ export async function executeCapabilityWithRecovery(options: {
       runId,
       now,
       onEvidence: options.onEvidence,
+      approvalGrant: options.approvalGrant,
     });
     accumulated.push(...result.evidence.map((event) => ({ ...event, sequence: accumulated.length + event.sequence })));
     const shouldRetry = result.status === "failure"

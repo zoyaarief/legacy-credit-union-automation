@@ -1,22 +1,98 @@
 {
   "schemaVersion": "1.0",
   "scenario": "restricted-account same-session human handoff",
-  "status": "success",
   "artifact": "get_savings_balance@1.1.0",
+  "generatedBy": "scripts/generate-evidence.mjs",
   "sensitiveValuesStored": false,
-  "ownershipTransitions": [
-    "automation",
-    "human_requested",
-    "human",
-    "resuming",
-    "completed"
-  ],
-  "intervention": {
-    "code": "operator_acknowledgment_required",
-    "stoppedAt": "wait_for_member_outcome",
-    "snapshot": ["permission_dialog", "continue_lookup", "session_active"]
-  },
-  "humanActions": ["click:Continue lookup"],
-  "sessionRecreated": false,
-  "checkpoint": "verified"
+  "modelTranscriptStored": false,
+  "result": {
+    "runId": "evidence-handoff-success",
+    "status": "success",
+    "outputs": {
+      "balance": "$2,458.17",
+      "accountStatus": "Active"
+    },
+    "evidence": [
+      {
+        "stepId": "policy",
+        "action": "policy_check",
+        "outcome": "ok",
+        "detail": "Artifact, inputs, action allowlist, risk policy, and target path approved.",
+        "sequence": 1,
+        "at": "2026-08-29T14:30:00.000Z"
+      },
+      {
+        "stepId": "enter_member_id",
+        "action": "type",
+        "outcome": "ok",
+        "detail": "Entered redacted input memberId using name:member_number.",
+        "sequence": 2,
+        "at": "2026-08-29T14:30:01.000Z"
+      },
+      {
+        "stepId": "submit_member_lookup",
+        "action": "click",
+        "outcome": "ok",
+        "detail": "Activated Retrieve Record button using button_text:Retrieve Record.",
+        "sequence": 3,
+        "at": "2026-08-29T14:30:02.000Z"
+      },
+      {
+        "stepId": "wait_for_member_outcome",
+        "action": "handoff",
+        "outcome": "intervention",
+        "detail": "Automation paused at a restricted-account acknowledgment and routed the live session to an operator.",
+        "sequence": 4,
+        "at": "2026-08-29T14:30:03.000Z"
+      },
+      {
+        "stepId": "handoff",
+        "action": "human_action",
+        "outcome": "ok",
+        "detail": "Human click on Continue lookup; values were not recorded.",
+        "sequence": 5,
+        "at": "2026-08-29T14:31:00.000Z"
+      },
+      {
+        "stepId": "wait_for_member_outcome",
+        "action": "resume",
+        "outcome": "ok",
+        "detail": "Human returned control; target policy and live-session context revalidated.",
+        "sequence": 6,
+        "at": "2026-08-29T14:31:01.000Z"
+      },
+      {
+        "stepId": "wait_for_member_outcome",
+        "action": "wait_for_outcome",
+        "outcome": "ok",
+        "detail": "Observed Member summary panel.",
+        "sequence": 7,
+        "at": "2026-08-29T14:31:02.000Z"
+      },
+      {
+        "stepId": "extract_savings_balance",
+        "action": "extract",
+        "outcome": "ok",
+        "detail": "Extracted declared balance output using css:.accounts-grid tbody tr .savings-balance.",
+        "sequence": 8,
+        "at": "2026-08-29T14:31:03.000Z"
+      },
+      {
+        "stepId": "extract_account_status",
+        "action": "extract",
+        "outcome": "ok",
+        "detail": "Extracted declared accountStatus output using css:.accounts-grid tbody tr .account-status.",
+        "sequence": 9,
+        "at": "2026-08-29T14:31:04.000Z"
+      },
+      {
+        "stepId": "checkpoint",
+        "action": "checkpoint",
+        "outcome": "ok",
+        "detail": "Success checkpoint verified and all declared outputs returned.",
+        "sequence": 10,
+        "at": "2026-08-29T14:31:05.000Z"
+      }
+    ]
+  }
 }

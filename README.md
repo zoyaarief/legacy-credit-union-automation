@@ -9,9 +9,11 @@ The submission-ready system implements the complete discovery → capability →
 - Optional OpenAI Responses API provider using structured JSON and `store: false`
 - Explicit safe-simulator fallback when no API key is configured
 - Strict action, target, input, output, route, and sensitive-value validation
+- Explicit `unsupported_goal` rejection before navigation for out-of-scope or mutating intents
 - Automatic compilation into the versioned capability schema
 - Generated-artifact review and an enforced `draft → approved` gate bound to its SHA-256 fingerprint
 - Known `member_not_found` business outcome and final checkpoint verification
+- Visibility-, enabled-state-, and uniqueness-aware locator resolution
 - Redacted discovery and replay evidence; model transcripts are discarded
 - Explicit `automation → human_requested → human → resuming → completed` ownership model
 - Restricted-account intervention with a redacted surface snapshot
@@ -38,8 +40,10 @@ The submission-ready system implements the complete discovery → capability →
 - Risk-derived approval quorum: one reviewer for read-only work and two independent reviewers for risky work
 - Submitter self-approval blocked whenever separation of duties is required
 - Durable approve/reject decisions with fingerprint-bound reviewer progress
+- Executor-level fingerprint and quorum verification for risky approval grants
 - Reviewer queue and administrator role-assignment controls in the console
 - Unit coverage for replay, recovery, encryption, discovery, model validation, storage policy, artifact fingerprints, fault classification, and handoff transitions
+- Automated browser E2E coverage for unsupported goals, successful replay, locator evidence, checkpoints, and business outcomes
 
 ## Run locally
 
@@ -84,7 +88,9 @@ Without `OPENAI_API_KEY`, step 1 is clearly labeled `safe-simulator`. With the k
 
 ```bash
 pnpm run verify:submission
+pnpm run evidence:generate
 pnpm test
+pnpm run test:e2e
 pnpm run typecheck
 pnpm run lint
 pnpm run build
@@ -109,6 +115,7 @@ pnpm run build
 - `lib/automation/stability.ts` — multi-run stability scoring
 - `lib/operations/` — durable rate limits, telemetry events, and health summaries
 - `lib/security/invocation.ts` — owner-bound HMAC ticket signing and verification
+- `lib/security/fingerprint.ts` — canonical SHA-256 fingerprints shared by review and execution
 - `lib/auth/roles.ts` — server-side role capabilities and authorization policy
 - `lib/alerts/delivery.ts` — exact-body webhook signing and delivery
 - `lib/jobs/core.ts` — durable job contracts

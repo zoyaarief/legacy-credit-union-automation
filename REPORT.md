@@ -14,13 +14,13 @@ Compilation accepts only the complete five-action savings lookup trace. This pre
 
 ## Determinism & error handling
 
-Discovery and replay validate their contracts before acting. Both enforce the same-origin `/legacy` allowlist, action and step limits, timeouts, output requirements, known business outcomes, and checkpoint verification. Provider decisions are rejected when they reference hidden or unknown controls, undeclared inputs or outputs, or arbitrary selectors.
+Discovery and replay validate their contracts before acting. The current discovery policy accepts only the read-only member savings-balance and account-status intent; unrelated or mutating language returns `unsupported_goal` before the target is prepared. Both engines enforce the same-origin `/legacy` allowlist, action and step limits, timeouts, output requirements, known business outcomes, and checkpoint verification. Provider decisions are rejected when they reference hidden, disabled, or unknown controls, undeclared inputs or outputs, or arbitrary selectors. Runtime locator resolution rejects hidden and ambiguous matches, requires enabled controls for input and click actions, and records the successful locator used for extraction.
 
 Results distinguish success, business outcome, human-required intervention, recoverable failure, policy denial, and hard failure. Replay uses ordered locator fallbacks and records the locator that succeeded. `member_not_found` exits as a valid business outcome. An operator-only interstitial returns a resume cursor rather than becoming a crash or being bypassed. A separate policy wrapper may restart the allowlisted session exactly once for explicitly allowlisted retryable codes. It merges both attempts and the recovery decision into one ordered evidence stream. Session expiry and slow-load timeout recover on a clean deterministic retry; application errors remain non-retryable hard failures.
 
 ## Heterogeneity & multi-tenant
 
-`DiscoveryAdapter` and `SurfaceAdapter` isolate surface mechanics from planning and execution. A desktop or accessibility-tree adapter can implement the same contracts without changing artifacts or result handling. The catalog keys the capability to `northstar-core-member-services@8` and resolves only static reviewed tenant profiles. The east-branch profile changes the entry point and two ordered locators while preserving inputs, outputs, policy, business outcomes, and checkpoint semantics.
+`DiscoveryAdapter` and `SurfaceAdapter` isolate the implemented web mechanics from planning and execution. The current artifact schema and locators are explicitly web-only; desktop or accessibility-tree support would require a new surface-specific schema plus adapter rather than reusing this artifact unchanged. The catalog keys the capability to `northstar-core-member-services@8` and resolves only static reviewed web tenant profiles. The east-branch profile changes the entry point and two ordered locators while preserving inputs, outputs, policy, business outcomes, and checkpoint semantics.
 
 ### Agent catalog & stability
 
@@ -52,7 +52,7 @@ Authorization is resolved on the server from the authenticated Site principal. A
 
 A protected control tick requeues expired job leases, deduplicates waiting-intervention alerts into a durable outbox, and drains due entries in bounded batches. Webhook requests sign the exact JSON body with HMAC-SHA-256. Delivery failures retain the alert and apply exponential backoff up to one hour. External delivery remains dormant when a destination is not configured.
 
-Approval is capability-fingerprint scoped rather than browser-state scoped. Read-only artifacts need one reviewer so the focused demo stays operable. Artifacts marked irreversible or requiring human approval need two distinct reviewer decisions, and the submitting principal cannot vote. Approval and rejection decisions are durable, replaceable by the same reviewer, and recompute the request state; any rejection blocks unattended replay. This adds real separation of duties without pretending the current owner-only Site already has multiple people.
+Approval is capability-fingerprint scoped rather than browser-state scoped. Read-only artifacts need one reviewer so the focused demo stays operable. Artifacts marked irreversible or requiring human approval need two distinct reviewer decisions, and the submitting principal cannot vote. Approval and rejection decisions are durable, replaceable by the same reviewer, and recompute the request state; any rejection blocks unattended replay. The executor independently requires a completed grant, validates its quorum and rejection count, and recomputes the artifact fingerprint before any target preparation. This adds real separation of duties without pretending the current owner-only Site already has multiple people.
 
 ### Durable jobs & cross-device recovery
 
@@ -64,4 +64,4 @@ Operational alerts are derived from stored state rather than client counters: lo
 
 ## Cuts
 
-Phase 10 completes a durable reviewer queue, risk-derived quorum, and submitter/reviewer separation for risky artifacts. The private demo still has one granted Site owner, so a real two-person vote cannot be demonstrated until another authenticated Site visitor is granted. No external webhook or platform scheduler destination was provided, so those integrations remain configuration-gated. Fully unattended browser execution and broader network faults remain deliberate cuts.
+The submitted evidence is generated directly by the discovery and replay engines and includes ordered event arrays, timestamps, decision reasons, successful locators, outputs, and checkpoints under artifact version 1.1.0. The private demo still has one granted Site owner, so a real two-person vote cannot be demonstrated until another authenticated Site visitor is granted. No external webhook or platform scheduler destination was provided, so those integrations remain configuration-gated. Desktop automation, fully unattended browser execution, and broader network faults remain deliberate cuts.

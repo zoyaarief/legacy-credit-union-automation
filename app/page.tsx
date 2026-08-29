@@ -8,6 +8,7 @@ import {
   executeCapability,
   executeCapabilityWithRecovery,
   validateCapability,
+  type ApprovalGrant,
   type Capability,
   type ControlTarget,
   type EvidenceEvent,
@@ -57,23 +58,45 @@ function getDocument(frame: HTMLIFrameElement) {
   return document;
 }
 
-function findTarget(document: Document, target: ControlTarget) {
+function isElementVisible(element: Element) {
+  if (element.closest("[hidden], [inert], [aria-hidden='true']")) return false;
+  const view = element.ownerDocument.defaultView;
+  const style = view?.getComputedStyle(element);
+  if (style && (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse" || Number(style.opacity) === 0)) return false;
+  return [...element.getClientRects()].some((rect) => rect.width > 0 && rect.height > 0);
+}
+
+function isElementEnabled(element: Element) {
+  if (element.closest("[inert], [aria-disabled='true']")) return false;
+  return !("disabled" in element && Boolean((element as HTMLButtonElement | HTMLInputElement).disabled));
+}
+
+function findTarget(document: Document, target: ControlTarget, options: { requireEnabled?: boolean } = {}) {
+  let ambiguousLocator: string | null = null;
+  let disabledLocator: string | null = null;
   for (const candidate of target.locators) {
-    let element: Element | null = null;
-    if (candidate.kind === "name") element = document.querySelector(`[name="${CSS.escape(candidate.value)}"]`);
-    if (candidate.kind === "css") element = document.querySelector(candidate.value);
+    let matches: Element[] = [];
+    if (candidate.kind === "name") matches = [...document.querySelectorAll(`[name="${CSS.escape(candidate.value)}"]`)];
+    if (candidate.kind === "css") matches = [...document.querySelectorAll(candidate.value)];
     if (candidate.kind === "button_text") {
-      element = [...document.querySelectorAll("button, input[type='submit']")].find(
+      matches = [...document.querySelectorAll("button, input[type='submit']")].filter(
         (item) => (item.textContent?.trim() || item.getAttribute("value")) === candidate.value,
-      ) ?? null;
+      );
     }
-    if (element) return { element, locator: `${candidate.kind}:${candidate.value}` };
+    const locator = `${candidate.kind}:${candidate.value}`;
+    const visible = matches.filter(isElementVisible);
+    const usable = options.requireEnabled ? visible.filter(isElementEnabled) : visible;
+    if (usable.length === 1) return { element: usable[0], locator };
+    if (usable.length > 1) ambiguousLocator = locator;
+    if (options.requireEnabled && visible.length > 0 && usable.length === 0) disabledLocator = locator;
   }
+  if (ambiguousLocator) throw new AutomationError("locator_ambiguous", "hard_failure", `Locator ${ambiguousLocator} matched multiple visible controls for ${target.description}.`);
+  if (disabledLocator) throw new AutomationError("target_not_interactable", "hard_failure", `${target.description} is visible but disabled.`);
   return null;
 }
 
-function requireTarget(document: Document, target: ControlTarget) {
-  const found = findTarget(document, target);
+function requireTarget(document: Document, target: ControlTarget, options: { requireEnabled?: boolean } = {}) {
+  const found = findTarget(document, target, options);
   if (!found) throw new AutomationError("locator_not_found", "hard_failure", `No locator matched ${target.description}.`);
   return found;
 }
@@ -112,7 +135,7 @@ function currentFrameUrl(frame: HTMLIFrameElement) {
 }
 
 async function typeIntoTarget(frame: HTMLIFrameElement, target: ControlTarget, value: string) {
-  const found = requireTarget(getDocument(frame), target);
+  const found = requireTarget(getDocument(frame), target, { requireEnabled: true });
   const input = found.element as HTMLInputElement;
   const targetWindow = frame.contentWindow;
   if (!targetWindow) throw new AutomationError("target_unavailable", "recoverable", "The target window is unavailable.", true);
@@ -127,7 +150,7 @@ async function typeIntoTarget(frame: HTMLIFrameElement, target: ControlTarget, v
 }
 
 async function clickTarget(frame: HTMLIFrameElement, target: ControlTarget) {
-  const found = requireTarget(getDocument(frame), target);
+  const found = requireTarget(getDocument(frame), target, { requireEnabled: true });
   (found.element as HTMLElement).click();
   return found.locator;
 }
@@ -158,7 +181,10 @@ function createReplayAdapter(frame: HTMLIFrameElement, nextRun: () => number, fa
     type: (target, value) => typeIntoTarget(frame, target, value),
     click: (target) => clickTarget(frame, target),
     waitForOutcome: (outcomes, timeoutMs) => waitForOutcomes(frame, outcomes, timeoutMs),
-    async extract(target) { return requireTarget(getDocument(frame), target).element.textContent?.trim() ?? ""; },
+    async extract(target) {
+      const found = requireTarget(getDocument(frame), target);
+      return { value: found.element.textContent?.trim() ?? "", locator: found.locator };
+    },
     async verify(target) { return Boolean(findTarget(getDocument(frame), target)); },
   };
 }
@@ -178,8 +204,8 @@ function createDiscoveryAdapter(frame: HTMLIFrameElement, nextRun: () => number)
       const memberInput = findTarget(document, TARGET_CATALOG.member_number)?.element as HTMLInputElement | undefined;
       const retrieveButton = findTarget(document, TARGET_CATALOG.retrieve_record)?.element as HTMLButtonElement | undefined;
       const controls = [
-        observedControl(document, "member_number", "textbox", { enabled: !memberInput?.disabled, filled: Boolean(memberInput?.value) }),
-        observedControl(document, "retrieve_record", "button", { enabled: !retrieveButton?.disabled }),
+        observedControl(document, "member_number", "textbox", { enabled: memberInput ? isElementEnabled(memberInput) : false, filled: Boolean(memberInput?.value) }),
+        observedControl(document, "retrieve_record", "button", { enabled: retrieveButton ? isElementEnabled(retrieveButton) : false }),
         observedControl(document, "member_summary", "region"), observedControl(document, "member_not_found", "status"),
         observedControl(document, "savings_balance", "text", { hasValue: true }), observedControl(document, "account_status", "text", { hasValue: true }),
       ].filter((control): control is ObservedControl => Boolean(control));
@@ -197,9 +223,10 @@ function createDiscoveryAdapter(frame: HTMLIFrameElement, nextRun: () => number)
         return outcome.kind === "business_outcome" ? { outcome: "business_outcome", businessCode: outcome.code } : { outcome: "success" };
       }
       if (decision.action === "extract") {
-        const value = requireTarget(getDocument(frame), TARGET_CATALOG[decision.targetId]).element.textContent?.trim() ?? "";
+        const found = requireTarget(getDocument(frame), TARGET_CATALOG[decision.targetId]);
+        const value = found.element.textContent?.trim() ?? "";
         if (!value) throw new AutomationError("output_missing", "hard_failure", `${decision.output} was empty.`);
-        return { value };
+        return { value, locator: found.locator };
       }
       throw new AutomationError("model_contract_invalid", "hard_failure", "Complete actions are verified by the discovery engine.");
     },
@@ -335,13 +362,25 @@ export default function Home() {
     } catch { setStorageState("unavailable"); return null; }
   }
 
+  function approvalGrant(review: ArtifactReview | null): ApprovalGrant | undefined {
+    if (!review || review.state !== "approved" || !review.reviewedAt) return undefined;
+    return {
+      artifactHash: review.artifactHash,
+      state: "approved",
+      approvals: review.approvals,
+      requiredApprovals: review.requiredApprovals,
+      rejections: review.rejections,
+      approvedAt: review.reviewedAt,
+    };
+  }
+
   async function discover(event: FormEvent) {
     event.preventDefault(); const frame = frameRef.current; if (!frame || busy) return;
     setDiscoveryStatus("running"); setDiscoveryLogs([]); setDiscoveryResult(null); setGeneratedArtifact(null);
     const result = await runDiscovery({ goal, inputs: { memberId }, origin: window.location.origin, provider: createAdaptiveDiscoveryProvider(), adapter: createDiscoveryAdapter(frame, () => ++runCounterRef.current), onEvidence: (evidence) => setDiscoveryLogs((items) => [...items, toDiscoveryLog(evidence)]) });
     if (result.status === "success") { setGeneratedArtifact(result.artifact); await registerArtifact(result.artifact); }
     setDiscoveryResult(result); setDiscoveryStatus(result.status);
-    await persistRun({ runId: result.runId, kind: "discovery", status: result.status, artifactName: result.status === "success" ? result.artifact.name : "get_savings_balance", artifactVersion: "1.0.0", provider: result.provider, summary: { eventCount: result.evidence.length, outcome: result.status }, evidence: result.evidence, artifact: result.status === "success" ? result.artifact : undefined });
+    await persistRun({ runId: result.runId, kind: "discovery", status: result.status, artifactName: result.status === "success" ? result.artifact.name : "get_savings_balance", artifactVersion: result.status === "success" ? result.artifact.version : savedCapability.version, provider: result.provider, summary: { eventCount: result.evidence.length, outcome: result.status }, evidence: result.evidence, artifact: result.status === "success" ? result.artifact : undefined });
   }
 
   async function replay(event: FormEvent) {
@@ -356,6 +395,7 @@ export default function Home() {
       origin: window.location.origin,
       createAdapter: (attempt) => createReplayAdapter(frame, () => ++runCounterRef.current, attempt === 1 ? faultMode : "none"),
       maxAttempts: 2,
+      approvalGrant: approvalGrant(artifactReview),
       onEvidence: (evidence) => setReplayLogs((items) => [...items, toReplayLog(evidence)]),
     });
     const result = execution.result;
@@ -435,6 +475,7 @@ export default function Home() {
       runId: ticket.invocationId,
       createAdapter: () => createReplayAdapter(frame, () => ++runCounterRef.current),
       maxAttempts: 2,
+      approvalGrant: approvalGrant(artifactReview),
       onEvidence: (evidence) => setAgentLogs((items) => [...items, { ...toReplayLog(evidence), step: `${runLabel} · ${toReplayLog(evidence).step}` }]),
     });
     const result = execution.result;
@@ -501,7 +542,7 @@ export default function Home() {
     if (!artifactApproved || (generatedArtifact && (await registerArtifact(generatedArtifact))?.state !== "approved")) return;
     stopHumanCaptureRef.current?.(); resumeRef.current = null; handoffJobRef.current = null; handoffInvocationRef.current = null; setMemberId("31415"); setHandoff(INITIAL_HANDOFF_STATE);
     setRunStatus("running"); setReplayLogs([]); setReplayResult(null);
-    const result = await executeCapability({ artifact: activeArtifact, inputs: { memberId: "31415" }, origin: window.location.origin, adapter: createReplayAdapter(frame, () => ++runCounterRef.current), onEvidence: (evidence) => setReplayLogs((items) => [...items, toReplayLog(evidence)]) });
+    const result = await executeCapability({ artifact: activeArtifact, inputs: { memberId: "31415" }, origin: window.location.origin, adapter: createReplayAdapter(frame, () => ++runCounterRef.current), approvalGrant: approvalGrant(artifactReview), onEvidence: (evidence) => setReplayLogs((items) => [...items, toReplayLog(evidence)]) });
     setReplayResult(result); setRunStatus(result.status);
     if (result.status === "human_required") {
       resumeRef.current = result.resume;
@@ -521,7 +562,7 @@ export default function Home() {
     stopHumanCaptureRef.current?.(); stopHumanCaptureRef.current = null;
     setHandoff((state) => transitionHandoff(state, { type: "resume" })); setRunStatus("running");
     const jobInvocation = handoffInvocationRef.current;
-    const result = await executeCapability({ artifact: jobInvocation?.artifact ?? activeArtifact, inputs: jobInvocation?.inputs ?? { memberId: "31415" }, origin: window.location.origin, adapter: createReplayAdapter(frame, () => ++runCounterRef.current), resume, humanActions: handoff.actions, onEvidence: (evidence) => setReplayLogs((items) => [...items, toReplayLog(evidence)]) });
+    const result = await executeCapability({ artifact: jobInvocation?.artifact ?? activeArtifact, inputs: jobInvocation?.inputs ?? { memberId: "31415" }, origin: window.location.origin, adapter: createReplayAdapter(frame, () => ++runCounterRef.current), resume, humanActions: handoff.actions, approvalGrant: approvalGrant(artifactReview), onEvidence: (evidence) => setReplayLogs((items) => [...items, toReplayLog(evidence)]) });
     setReplayLogs(result.evidence.map(toReplayLog)); setReplayResult(result); setRunStatus(result.status);
     if (result.status === "success") setHandoff((state) => transitionHandoff(state, { type: "complete" }));
     const completedArtifact = jobInvocation?.artifact ?? activeArtifact;
@@ -562,7 +603,7 @@ export default function Home() {
 
       <aside className="panel run-panel"><div className="panel-heading"><div><span className="panel-number">{mode === "discover" ? "AI" : mode === "replay" ? "DET" : mode === "handoff" ? "HITL" : "API"}</span><h3>{mode === "discover" ? "Goal-driven discovery" : mode === "replay" ? "Deterministic replay" : mode === "handoff" ? "Intervention control" : "Agent capability catalog"}</h3></div><span className={`status-pill ${activeStatus}`}>{String(activeStatus).replace("_", " ")}</span></div>
 
-        {mode === "discover" && <><form onSubmit={discover} className="run-form discovery-form"><label htmlFor="goal">Goal</label><textarea id="goal" value={goal} onChange={(event) => setGoal(event.target.value.slice(0, 500))} required minLength={12} maxLength={500} /><label htmlFor="discovery-member-id">Invocation input</label><div className="input-row"><input id="discovery-member-id" value={memberId} onChange={(event) => setMemberId(event.target.value.replace(/\D/g, "").slice(0, 5))} inputMode="numeric" required pattern="[0-9]{5}" /><button type="submit" disabled={busy || memberId.length !== 5}>{discoveryStatus === "running" ? "Discovering…" : "Discover capability"}</button></div><p>Use <button type="button" className="inline-button" onClick={() => setMemberId("12345")}>12345</button> for success. Sensitive values stay local.</p></form><div className="result-card discovery-result" aria-live="polite"><p className="result-label">Discovery result</p>{!discoveryResult && <p className="empty-result">Submit a goal to start the constrained loop.</p>}{discoveryResult?.status === "success" && <div className="success-result"><strong>{discoveryResult.artifact.name}</strong><span>{discoveryResult.artifact.steps.length} actions · {discoveryResult.provider}</span><div className="result-actions"><button onClick={useGeneratedArtifact}>Replay generated artifact</button><button className="secondary" onClick={() => downloadJson(`${discoveryResult.artifact.name}.json`, discoveryResult.artifact)}>Download JSON</button></div></div>}{discoveryResult?.status === "business_outcome" && <div className="outcome-result"><strong>{discoveryResult.code}</strong><span>{discoveryResult.message}</span></div>}{discoveryResult?.status === "failure" && <div className="failure-result"><strong>{discoveryResult.error.code}</strong><span>Step {discoveryResult.error.step} · {discoveryResult.error.message}</span></div>}</div></>}
+        {mode === "discover" && <><form onSubmit={discover} className="run-form discovery-form"><label htmlFor="goal">Goal</label><textarea id="goal" value={goal} onChange={(event) => setGoal(event.target.value.slice(0, 500))} required minLength={12} maxLength={500} /><p>Supported intent: read-only member savings balance and account-status lookup.</p><label htmlFor="discovery-member-id">Invocation input</label><div className="input-row"><input id="discovery-member-id" value={memberId} onChange={(event) => setMemberId(event.target.value.replace(/\D/g, "").slice(0, 5))} inputMode="numeric" required pattern="[0-9]{5}" /><button type="submit" disabled={busy || memberId.length !== 5}>{discoveryStatus === "running" ? "Discovering…" : "Discover capability"}</button></div><p>Use <button type="button" className="inline-button" onClick={() => setMemberId("12345")}>12345</button> for success. Sensitive values stay local.</p></form><div className="result-card discovery-result" aria-live="polite"><p className="result-label">Discovery result</p>{!discoveryResult && <p className="empty-result">Submit a goal to start the constrained loop.</p>}{discoveryResult?.status === "success" && <div className="success-result"><strong>{discoveryResult.artifact.name}</strong><span>{discoveryResult.artifact.steps.length} actions · {discoveryResult.provider}</span><div className="result-actions"><button onClick={useGeneratedArtifact}>Replay generated artifact</button><button className="secondary" onClick={() => downloadJson(`${discoveryResult.artifact.name}.json`, discoveryResult.artifact)}>Download JSON</button></div></div>}{discoveryResult?.status === "business_outcome" && <div className="outcome-result"><strong>{discoveryResult.code}</strong><span>{discoveryResult.message}</span></div>}{discoveryResult?.status === "failure" && <div className="failure-result"><strong>{discoveryResult.error.code}</strong><span>Step {discoveryResult.error.step} · {discoveryResult.error.message}</span></div>}</div></>}
 
         {mode === "replay" && <><div className="artifact-source"><span>Artifact source</span><strong>{generatedArtifact ? `Generated or restored · ${artifactReview?.state ?? "draft"}` : "Bundled baseline · approved"}</strong><small>{activeArtifact.name}@{activeArtifact.version}</small></div><form onSubmit={replay} className="run-form"><label htmlFor="replay-member-id">Member ID input</label><div className="input-row"><input id="replay-member-id" value={memberId} onChange={(event) => setMemberId(event.target.value.replace(/\D/g, "").slice(0, 5))} inputMode="numeric" required pattern="[0-9]{5}" /><button type="submit" disabled={busy || memberId.length !== 5 || !artifactApproved}>{runStatus === "running" ? "Running…" : artifactApproved ? "Run capability" : "Approval required"}</button></div><label htmlFor="fault-mode">Fault injection</label><select id="fault-mode" className="policy-select" value={faultMode} onChange={(event) => setFaultMode(event.target.value as FaultMode)}><option value="none">None — normal execution</option><option value="session_expired">Auto-recover — session expired</option><option value="slow_load">Auto-recover — slow load timeout</option><option value="application_error">Stop — hard application error</option></select><p>Try <button type="button" className="inline-button" onClick={() => setMemberId("12345")}>12345</button> or <button type="button" className="inline-button" onClick={() => setMemberId("00000")}>00000</button>. Recovery is capped at one clean deterministic retry.</p></form><ResultCard result={replayResult} />{recoveryStatus && <div className={`recovery-summary ${recoveryStatus.recovered ? "recovered" : "settled"}`}><span>{recoveryStatus.recovered ? "Recovered" : "Policy settled"}</span><strong>{recoveryStatus.attempts} deterministic attempt{recoveryStatus.attempts === 1 ? "" : "s"}</strong><small>{recoveryStatus.recovered ? "The clean retry reached the declared checkpoint." : "No retry was needed or permitted."}</small></div>}</>}
 

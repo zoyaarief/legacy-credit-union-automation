@@ -1,5 +1,6 @@
 import { validateCapability, type Capability, type EvidenceEvent } from "../automation/core.ts";
 import { redactDiscoveryText, type DiscoveryEvidenceEvent } from "../discovery/core.ts";
+import { sha256Fingerprint } from "../security/fingerprint.ts";
 
 export type StoredRunKind = "discovery" | "replay" | "handoff" | "agent_invocation";
 export type StoredRunStatus = "success" | "business_outcome" | "human_required" | "failure";
@@ -80,25 +81,12 @@ export function sanitizeRunRecord(value: unknown): RunRecordInput {
   };
 }
 
-function canonicalize(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalize).join(",")}]`;
-  if (value && typeof value === "object") {
-    return `{${Object.entries(value as Record<string, unknown>)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, item]) => `${JSON.stringify(key)}:${canonicalize(item)}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value) ?? "null";
-}
-
 export async function sha256(value: unknown): Promise<string> {
-  const bytes = new TextEncoder().encode(canonicalize(value));
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  return sha256Fingerprint(value);
 }
 
 export async function capabilityFingerprint(value: unknown): Promise<string> {
-  return sha256(cleanValue(validateCapability(value)));
+  return sha256Fingerprint(validateCapability(value));
 }
 
 export function sanitizeCapabilityForStorage(value: unknown): Capability {

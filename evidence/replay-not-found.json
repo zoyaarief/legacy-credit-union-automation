@@ -1,13 +1,49 @@
 {
   "schemaVersion": "1.0",
   "scenario": "generated artifact known business outcome",
-  "status": "business_outcome",
-  "artifact": "get_savings_balance@1.0.0",
+  "artifact": "get_savings_balance@1.1.0",
+  "generatedBy": "scripts/generate-evidence.mjs",
   "sensitiveValuesStored": false,
-  "businessOutcome": {
+  "modelTranscriptStored": false,
+  "result": {
+    "runId": "evidence-replay-not-found",
+    "status": "business_outcome",
     "code": "member_not_found",
     "message": "No member matched the supplied identifier.",
-    "retryable": false
-  },
-  "eventCount": 4
+    "retryable": false,
+    "evidence": [
+      {
+        "stepId": "policy",
+        "action": "policy_check",
+        "outcome": "ok",
+        "detail": "Artifact, inputs, action allowlist, risk policy, and target path approved.",
+        "sequence": 1,
+        "at": "2026-08-29T14:20:00.000Z"
+      },
+      {
+        "stepId": "enter_member_id",
+        "action": "type",
+        "outcome": "ok",
+        "detail": "Entered redacted input memberId using name:member_number.",
+        "sequence": 2,
+        "at": "2026-08-29T14:20:01.000Z"
+      },
+      {
+        "stepId": "submit_member_lookup",
+        "action": "click",
+        "outcome": "ok",
+        "detail": "Activated Retrieve Record button using button_text:Retrieve Record.",
+        "sequence": 3,
+        "at": "2026-08-29T14:20:02.000Z"
+      },
+      {
+        "stepId": "wait_for_member_outcome",
+        "action": "wait_for_outcome",
+        "outcome": "business_outcome",
+        "detail": "Detected declared member_not_found outcome.",
+        "sequence": 4,
+        "at": "2026-08-29T14:20:03.000Z"
+      }
+    ]
+  }
 }
