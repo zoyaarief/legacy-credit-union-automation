@@ -1,68 +1,34 @@
 import {
   AutomationError,
+  HumanInterventionError,
   isAllowedTargetUrl,
   validateCapability,
   type Capability,
   type ControlTarget,
-  type OutcomeDefinition,
+  type HumanAction,
+  type Locator,
+  type SurfaceSnapshot,
 } from "../automation/core.ts";
 
-export const TARGET_CATALOG = {
-  member_number: {
-    description: "Member Number input",
-    locators: [
-      { kind: "name", value: "member_number" },
-      { kind: "css", value: "input[maxlength='5']" },
-    ],
-  },
-  retrieve_record: {
-    description: "Retrieve Record button",
-    locators: [
-      { kind: "button_text", value: "Retrieve Record" },
-      { kind: "css", value: "form button[type='submit']" },
-    ],
-  },
-  member_summary: {
-    description: "Member summary panel",
-    locators: [
-      { kind: "css", value: "#member-summary" },
-      { kind: "css", value: ".member-result" },
-    ],
-  },
-  member_not_found: {
-    description: "Member not found message",
-    locators: [
-      { kind: "css", value: "#not-found" },
-      { kind: "css", value: ".legacy-message" },
-    ],
-  },
-  savings_balance: {
-    description: "Regular savings current balance cell",
-    locators: [
-      { kind: "css", value: ".accounts-grid tbody tr .savings-balance" },
-      { kind: "css", value: "#member-summary .money" },
-    ],
-  },
-  account_status: {
-    description: "Regular savings status cell",
-    locators: [
-      { kind: "css", value: ".accounts-grid tbody tr .account-status" },
-      { kind: "css", value: "#member-summary .accounts-grid td:nth-child(4)" },
-    ],
-  },
-} as const satisfies Record<string, ControlTarget>;
-
-export type TargetId = keyof typeof TARGET_CATALOG;
-export type DiscoveryActionName = "type" | "click" | "wait_for_outcome" | "extract" | "complete";
+export type DiscoveryActionName =
+  | "type"
+  | "click"
+  | "wait_for_change"
+  | "extract"
+  | "business_outcome"
+  | "request_human"
+  | "complete";
 
 export type ObservedControl = {
-  id: TargetId;
-  role: "textbox" | "button" | "region" | "status" | "text";
+  ref: string;
+  role: "textbox" | "button" | "combobox" | "region" | "dialog" | "status" | "text";
   name: string;
+  context: string;
   visible: boolean;
   enabled?: boolean;
   filled?: boolean;
   hasValue?: boolean;
+  locatorCandidates: Locator[];
 };
 
 export type SurfaceObservation = {
@@ -73,11 +39,23 @@ export type SurfaceObservation = {
 
 export type DiscoveryDecision = {
   action: DiscoveryActionName;
-  targetId: TargetId | null;
+  controlRef: string | null;
+  locators: Locator[];
   input: string | null;
   output: string | null;
+  businessCode: string | null;
+  interventionCode: string | null;
   reason: string;
   capabilityName: string | null;
+  target: ControlTarget | null;
+};
+
+export type DiscoveryHistoryEntry = {
+  action: DiscoveryActionName;
+  controlRef: string | null;
+  targetName: string | null;
+  input: string | null;
+  output: string | null;
 };
 
 export type DecisionContext = {
@@ -87,7 +65,7 @@ export type DecisionContext = {
   inputContract: Record<string, { type: "string"; sensitive: boolean }>;
   outputContract: Record<string, { type: "currency" | "string" }>;
   observation: SurfaceObservation;
-  history: Array<{ action: DiscoveryActionName; targetId: TargetId | null; input: string | null; output: string | null }>;
+  history: DiscoveryHistoryEntry[];
 };
 
 export type ProviderDecision = { provider: string; decision: DiscoveryDecision };
@@ -96,8 +74,6 @@ export type DiscoveryProvider = { decide(context: DecisionContext): Promise<Prov
 export type DiscoveryAdapterResult = {
   locator?: string;
   value?: string;
-  outcome?: "success" | "business_outcome";
-  businessCode?: string;
 };
 
 export type DiscoveryAdapter = {
@@ -105,17 +81,35 @@ export type DiscoveryAdapter = {
   currentUrl(): string;
   observe(): Promise<SurfaceObservation>;
   execute(decision: DiscoveryDecision, inputs: Record<string, string>): Promise<DiscoveryAdapterResult>;
-  verify(targetId: TargetId): Promise<boolean>;
+  verify(target: ControlTarget): Promise<boolean>;
 };
 
 export type DiscoveryEvidenceEvent = {
   sequence: number;
   at: string;
-  phase: "policy" | "observe" | "decide" | "act" | "compile" | "complete";
+  phase: "policy" | "observe" | "decide" | "act" | "handoff" | "resume" | "compile" | "complete";
   step: number;
-  outcome: "ok" | "business_outcome" | "error";
+  outcome: "ok" | "business_outcome" | "intervention" | "error";
   detail: string;
   provider?: string;
+};
+
+export type DiscoveryRecordedAction = {
+  action: "type" | "click" | "wait_for_change" | "extract";
+  target: ControlTarget | null;
+  controlRef: string | null;
+  input: string | null;
+  output: string | null;
+};
+
+export type DiscoveryResume = {
+  runId: string;
+  step: number;
+  history: DiscoveryHistoryEntry[];
+  trace: DiscoveryRecordedAction[];
+  outputs: Record<string, string>;
+  evidence: DiscoveryEvidenceEvent[];
+  provider: string;
 };
 
 export type DiscoveryResult =
@@ -137,66 +131,50 @@ export type DiscoveryResult =
     }
   | {
       runId: string;
+      status: "human_required";
+      provider: string;
+      intervention: { code: string; message: string; step: number; snapshot: SurfaceSnapshot };
+      resume: DiscoveryResume;
+      evidence: DiscoveryEvidenceEvent[];
+    }
+  | {
+      runId: string;
       status: "failure";
       provider: string;
       error: { code: string; message: string; step: number; retryable: boolean };
       evidence: DiscoveryEvidenceEvent[];
     };
 
-type RecordedAction = {
-  action: Exclude<DiscoveryActionName, "complete">;
-  targetId: TargetId | null;
-  input: string | null;
-  output: string | null;
-};
-
-const DISCOVERY_POLICY_CAPABILITY: Capability = {
-  schemaVersion: "1.0",
-  name: "discovery_policy",
-  version: "1.1.0",
-  description: "Policy envelope for discovery against the Northstar member-services surface.",
+const DISCOVERY_TARGET_POLICY = {
   target: {
-    surface: "web",
+    surface: "web" as const,
     application: "northstar-core-member-services",
     entryPoint: "/legacy",
     allowlist: { sameOrigin: true, pathPrefixes: ["/legacy"] },
   },
-  inputs: { memberId: { type: "string", required: true, pattern: "^[0-9]{5}$", sensitive: true } },
-  outputs: { balance: { type: "currency", currency: "USD" }, accountStatus: { type: "string" } },
-  policy: {
-    allowedActions: ["type", "click", "wait_for_outcome", "extract"],
-    risk: "read_only",
-    maxSteps: 8,
-    runTimeoutMs: 20000,
-    requiresHumanApproval: false,
-  },
-  steps: [
-    { id: "policy_type", action: "type", input: "memberId", target: TARGET_CATALOG.member_number },
-    { id: "policy_click", action: "click", target: TARGET_CATALOG.retrieve_record },
-    {
-      id: "policy_wait",
-      action: "wait_for_outcome",
-      timeoutMs: 5000,
-      outcomes: [
-        { kind: "success", target: TARGET_CATALOG.member_summary },
-        { kind: "business_outcome", code: "member_not_found", target: TARGET_CATALOG.member_not_found },
-      ],
-    },
-    { id: "policy_balance", action: "extract", output: "balance", target: TARGET_CATALOG.savings_balance },
-    { id: "policy_status", action: "extract", output: "accountStatus", target: TARGET_CATALOG.account_status },
-  ],
-  checkpoint: { kind: "element_visible", target: TARGET_CATALOG.member_summary },
-  businessOutcomes: [
-    { code: "member_not_found", message: "No member matched the supplied identifier.", retryable: false },
+} satisfies Pick<Capability, "target">;
+
+const DISCOVERY_MAX_STEPS = 8;
+const DISCOVERY_TIMEOUT_MS = 20_000;
+
+// A successful lookup cannot expose the mutually exclusive not-found state. This
+// matcher remains domain policy; successful-path controls come from the live trace.
+const MEMBER_NOT_FOUND_TARGET: ControlTarget = {
+  description: "Member-not-found business outcome",
+  locators: [
+    { kind: "css", value: ".legacy-message" },
+    { kind: "css", value: ".legacy-content > .legacy-message" },
   ],
 };
 
-const ACTION_TARGETS: Record<DiscoveryActionName, TargetId[]> = {
-  type: ["member_number"],
-  click: ["retrieve_record"],
-  wait_for_outcome: ["member_summary"],
-  extract: ["savings_balance", "account_status"],
-  complete: ["member_summary"],
+const TARGET_ACTIONS = new Set<DiscoveryActionName>(["type", "click", "extract", "business_outcome", "request_human", "complete"]);
+const ROLE_POLICY: Partial<Record<DiscoveryActionName, ObservedControl["role"][]>> = {
+  type: ["textbox", "combobox"],
+  click: ["button"],
+  extract: ["text"],
+  business_outcome: ["status", "region", "text"],
+  request_human: ["dialog"],
+  complete: ["region"],
 };
 
 export function redactDiscoveryText(value: string): string {
@@ -206,39 +184,94 @@ export function redactDiscoveryText(value: string): string {
     .replace(/(?:sk|api|token)[-_][A-Za-z0-9_-]{12,}/gi, "[REDACTED_SECRET]");
 }
 
+function parseLocator(value: unknown): Locator | null {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Record<string, unknown>;
+  if (!["name", "css", "button_text"].includes(String(candidate.kind))) return null;
+  if (typeof candidate.value !== "string" || candidate.value.length === 0 || candidate.value.length > 240) return null;
+  return { kind: candidate.kind as Locator["kind"], value: candidate.value };
+}
+
+function sameLocator(left: Locator, right: Locator) {
+  return left.kind === right.kind && left.value === right.value;
+}
+
 export function validateDiscoveryDecision(decision: unknown, context: DecisionContext): DiscoveryDecision {
   if (typeof decision !== "object" || decision === null) {
     throw new AutomationError("model_contract_invalid", "hard_failure", "The model returned an invalid decision object.");
   }
   const candidate = decision as Record<string, unknown>;
-  if (!["type", "click", "wait_for_outcome", "extract", "complete"].includes(String(candidate.action))) {
+  const action = String(candidate.action) as DiscoveryActionName;
+  if (!["type", "click", "wait_for_change", "extract", "business_outcome", "request_human", "complete"].includes(action)) {
     throw new AutomationError("model_contract_invalid", "hard_failure", "The model returned an unsupported action.");
-  }
-  const action = candidate.action as DiscoveryActionName;
-  const targetId = candidate.targetId === null ? null : String(candidate.targetId) as TargetId;
-  if (!targetId || !Object.hasOwn(TARGET_CATALOG, targetId) || !ACTION_TARGETS[action].includes(targetId)) {
-    throw new AutomationError("policy_denied", "policy_denied", `Target ${String(candidate.targetId)} is not allowed for ${action}.`);
   }
   if (typeof candidate.reason !== "string" || candidate.reason.length === 0 || candidate.reason.length > 240) {
     throw new AutomationError("model_contract_invalid", "hard_failure", "The model decision needs a concise reason.");
   }
+
+  const controlRef = candidate.controlRef === null ? null : String(candidate.controlRef);
   const input = candidate.input === null ? null : String(candidate.input);
   const output = candidate.output === null ? null : String(candidate.output);
+  const businessCode = candidate.businessCode === null ? null : String(candidate.businessCode);
+  const interventionCode = candidate.interventionCode === null ? null : String(candidate.interventionCode);
   const capabilityName = candidate.capabilityName === null ? null : String(candidate.capabilityName);
+  const rawLocators = Array.isArray(candidate.locators) ? candidate.locators : [];
+
+  let target: ControlTarget | null = null;
+  if (TARGET_ACTIONS.has(action)) {
+    const control = context.observation.controls.find((item) => item.ref === controlRef && item.visible);
+    if (!control) throw new AutomationError("target_not_observed", "hard_failure", "The model selected a control that is not visible in the current observation.");
+    if (!(ROLE_POLICY[action] ?? []).includes(control.role)) {
+      throw new AutomationError("policy_denied", "policy_denied", `A ${control.role} control is not allowed for ${action}.`);
+    }
+    if (["type", "click"].includes(action) && control.enabled === false) {
+      throw new AutomationError("target_not_interactable", "hard_failure", "The selected control is visible but disabled.");
+    }
+    const locators = rawLocators.map(parseLocator);
+    if (locators.length !== 2 || locators.some((item) => item === null)) {
+      throw new AutomationError("model_contract_invalid", "hard_failure", "The model must select two ordered locator candidates for the observed control.");
+    }
+    const typedLocators = locators as Locator[];
+    if (typedLocators.some((locator) => !control.locatorCandidates.some((allowed) => sameLocator(locator, allowed)))) {
+      throw new AutomationError("policy_denied", "policy_denied", "The model proposed a locator that was not derived from the observed control.");
+    }
+    target = {
+      description: redactDiscoveryText(`${control.name}${control.context ? ` — ${control.context}` : ""}`).slice(0, 240),
+      locators: typedLocators,
+    };
+  } else if (controlRef !== null || rawLocators.length !== 0) {
+    throw new AutomationError("model_contract_invalid", "hard_failure", `${action} must not select a control or locator.`);
+  }
+
   if (action === "type" && (input !== "memberId" || !Object.hasOwn(context.inputContract, input))) {
     throw new AutomationError("policy_denied", "policy_denied", "The model referenced an undeclared input.");
   }
+  if (action !== "type" && input !== null) throw new AutomationError("model_contract_invalid", "hard_failure", "Only type may reference an input.");
   if (action === "extract" && (!output || !Object.hasOwn(context.outputContract, output))) {
     throw new AutomationError("policy_denied", "policy_denied", "The model referenced an undeclared output.");
   }
-  if (["type", "click", "extract", "complete"].includes(action)) {
-    const control = context.observation.controls.find((candidate) => candidate.id === targetId && candidate.visible);
-    if (!control) throw new AutomationError("target_not_observed", "hard_failure", `${targetId} is not visible in the current observation.`);
-    if (["type", "click"].includes(action) && control.enabled === false) {
-      throw new AutomationError("target_not_interactable", "hard_failure", `${targetId} is visible but disabled.`);
-    }
+  if (action !== "extract" && output !== null) throw new AutomationError("model_contract_invalid", "hard_failure", "Only extract may declare an output.");
+  if (action === "business_outcome" && businessCode !== "member_not_found") {
+    throw new AutomationError("policy_denied", "policy_denied", "The model reported an undeclared business outcome.");
   }
-  return { action, targetId, input, output, reason: redactDiscoveryText(candidate.reason), capabilityName };
+  if (action !== "business_outcome" && businessCode !== null) throw new AutomationError("model_contract_invalid", "hard_failure", "Only a business outcome may declare a business code.");
+  if (action === "request_human" && interventionCode !== "operator_acknowledgment_required") {
+    throw new AutomationError("policy_denied", "policy_denied", "The model reported an undeclared intervention.");
+  }
+  if (action !== "request_human" && interventionCode !== null) throw new AutomationError("model_contract_invalid", "hard_failure", "Only a handoff may declare an intervention code.");
+
+  return {
+    action,
+    controlRef,
+    locators: target?.locators ?? [],
+    input,
+    output,
+    businessCode,
+    interventionCode,
+    reason: redactDiscoveryText(candidate.reason),
+    capabilityName,
+    target,
+  };
 }
 
 function validateDiscoveryInputs(inputs: Record<string, unknown>): Record<string, string> {
@@ -252,18 +285,23 @@ function validateDiscoveryInputs(inputs: Record<string, unknown>): Record<string
   return { memberId };
 }
 
-const MUTATING_GOAL_TERMS = /\b(close|delete|remove|transfer|withdraw|deposit|freeze|unfreeze|block|unblock|update|change|edit|open|create|approve|deny|decline)\b/i;
+const SUPPORTED_GOAL_PATTERNS = [
+  /^(?:please\s+)?(?:look\s*up|find|retrieve|query|check|view|read|get|show)\s+(?:the\s+)?member(?:\s+(?:\{\{memberId\}\}|memberId|\d{5}))?\s+and\s+(?:return|report|read|show|get|display)\s+(?:the\s+)?(?:current\s+)?savings(?:\s+account)?\s+balance\s+and\s+(?:the\s+)?(?:account\s+)?status(?:\s+please)?[.!]?$/i,
+  /^(?:please\s+)?(?:get|read|show|display|report|return|retrieve)\s+(?:the\s+)?(?:current\s+)?savings(?:\s+account)?\s+balance\s+and\s+(?:the\s+)?(?:account\s+)?status\s+for\s+(?:the\s+)?member(?:\s+(?:\{\{memberId\}\}|memberId|\d{5}))?(?:\s+please)?[.!]?$/i,
+  /^(?:please\s+)?(?:get|read|show|display|report|return|retrieve)\s+(?:the\s+)?member(?:\s+(?:\{\{memberId\}\}|memberId|\d{5}))?['’]s\s+(?:current\s+)?savings(?:\s+account)?\s+balance\s+and\s+(?:account\s+)?status(?:\s+please)?[.!]?$/i,
+];
+
+export function classifySupportedDiscoveryGoal(goal: string): "get_savings_balance" | null {
+  const normalized = goal.trim().replace(/\s+/g, " ");
+  return SUPPORTED_GOAL_PATTERNS.some((pattern) => pattern.test(normalized)) ? "get_savings_balance" : null;
+}
 
 export function validateSupportedDiscoveryGoal(goal: string): string {
   if (typeof goal !== "string" || goal.trim().length < 12 || goal.length > 500) {
     throw new AutomationError("invalid_goal", "invalid_request", "Goal must be between 12 and 500 characters.");
   }
-  const normalized = goal.trim();
-  const requestsSupportedOutputs = /\b(member|memberId)\b/i.test(normalized)
-    && /\bsavings?\b/i.test(normalized)
-    && /\bbalance\b/i.test(normalized)
-    && /\bstatus\b/i.test(normalized);
-  if (MUTATING_GOAL_TERMS.test(normalized) || !requestsSupportedOutputs) {
+  const normalized = goal.trim().replace(/\s+/g, " ");
+  if (!classifySupportedDiscoveryGoal(normalized)) {
     throw new AutomationError(
       "unsupported_goal",
       "invalid_request",
@@ -281,48 +319,68 @@ function sanitizeCapabilityName(value: string | null): string {
 export function compileDiscoveredCapability(options: {
   goal: string;
   provider: string;
-  trace: RecordedAction[];
+  trace: DiscoveryRecordedAction[];
+  checkpointTarget: ControlTarget;
   capabilityName: string | null;
   generatedAt: string;
 }): Capability {
-  const has = (action: RecordedAction["action"], targetId: TargetId) => options.trace.some((item) => item.action === action && item.targetId === targetId);
-  if (!has("type", "member_number") || !has("click", "retrieve_record") || !has("wait_for_outcome", "member_summary") || !has("extract", "savings_balance") || !has("extract", "account_status")) {
+  const typeStep = options.trace.find((item) => item.action === "type" && item.input === "memberId" && item.target);
+  const clickStep = options.trace.find((item) => item.action === "click" && item.target);
+  const waitStep = options.trace.find((item) => item.action === "wait_for_change");
+  const balanceStep = options.trace.find((item) => item.action === "extract" && item.output === "balance" && item.target);
+  const statusStep = options.trace.find((item) => item.action === "extract" && item.output === "accountStatus" && item.target);
+  if (!typeStep || !clickStep || !waitStep || !balanceStep || !statusStep) {
     throw new AutomationError("trace_incomplete", "hard_failure", "The successful discovery trace is missing required reusable actions.");
   }
+
+  const steps = options.trace.map((item, index) => {
+    if (item.action === "type" && item.target) return { id: `step_${index + 1}_type_member_id`, action: "type" as const, input: "memberId", target: item.target };
+    if (item.action === "click" && item.target) return { id: `step_${index + 1}_submit_lookup`, action: "click" as const, target: item.target };
+    if (item.action === "wait_for_change") return {
+      id: `step_${index + 1}_wait_for_outcome`,
+      action: "wait_for_outcome" as const,
+      timeoutMs: 5000,
+      outcomes: [
+        { kind: "success" as const, target: options.checkpointTarget },
+        { kind: "business_outcome" as const, code: "member_not_found", target: MEMBER_NOT_FOUND_TARGET },
+      ],
+    };
+    if (item.action === "extract" && item.target && item.output) return { id: `step_${index + 1}_extract_${item.output}`, action: "extract" as const, output: item.output, target: item.target };
+    throw new AutomationError("trace_invalid", "hard_failure", "The discovery trace contains an action that cannot be compiled.");
+  });
 
   const artifact = {
     schemaVersion: "1.0",
     name: sanitizeCapabilityName(options.capabilityName),
-    version: "1.1.0",
+    version: "1.2.0",
     description: `Discovered from goal: ${redactDiscoveryText(options.goal)}`,
-    target: DISCOVERY_POLICY_CAPABILITY.target,
-    inputs: DISCOVERY_POLICY_CAPABILITY.inputs,
-    outputs: DISCOVERY_POLICY_CAPABILITY.outputs,
-    policy: DISCOVERY_POLICY_CAPABILITY.policy,
-    steps: options.trace.map((item, index) => {
-      if (item.action === "type") return { id: `step_${index + 1}_type_member_id`, action: "type" as const, input: "memberId", target: TARGET_CATALOG.member_number };
-      if (item.action === "click") return { id: `step_${index + 1}_submit_lookup`, action: "click" as const, target: TARGET_CATALOG.retrieve_record };
-      if (item.action === "wait_for_outcome") return {
-        id: `step_${index + 1}_wait_for_outcome`,
-        action: "wait_for_outcome" as const,
-        timeoutMs: 5000,
-        outcomes: [
-          { kind: "success" as const, target: TARGET_CATALOG.member_summary },
-          { kind: "business_outcome" as const, code: "member_not_found", target: TARGET_CATALOG.member_not_found },
-        ],
-      };
-      const output = item.output === "accountStatus" ? "accountStatus" : "balance";
-      return { id: `step_${index + 1}_extract_${output}`, action: "extract" as const, output, target: output === "balance" ? TARGET_CATALOG.savings_balance : TARGET_CATALOG.account_status };
-    }),
-    checkpoint: DISCOVERY_POLICY_CAPABILITY.checkpoint,
-    businessOutcomes: DISCOVERY_POLICY_CAPABILITY.businessOutcomes,
-    discovery: {
-      provider: options.provider,
-      generatedAt: options.generatedAt,
-      storesModelTranscript: false,
+    target: DISCOVERY_TARGET_POLICY.target,
+    inputs: { memberId: { type: "string" as const, required: true, pattern: "^[0-9]{5}$", sensitive: true } },
+    outputs: { balance: { type: "currency" as const, currency: "USD" }, accountStatus: { type: "string" as const } },
+    policy: {
+      allowedActions: ["type", "click", "wait_for_outcome", "extract"],
+      risk: "read_only" as const,
+      maxSteps: DISCOVERY_MAX_STEPS,
+      runTimeoutMs: DISCOVERY_TIMEOUT_MS,
+      requiresHumanApproval: false,
     },
+    steps,
+    checkpoint: { kind: "element_visible" as const, target: options.checkpointTarget },
+    businessOutcomes: [{ code: "member_not_found", message: "No member matched the supplied identifier.", retryable: false }],
+    discovery: { provider: options.provider, generatedAt: options.generatedAt, storesModelTranscript: false },
   };
   return validateCapability(artifact);
+}
+
+function interventionSnapshot(observation: SurfaceObservation): SurfaceSnapshot {
+  let path = "/legacy";
+  try { path = new URL(observation.url).pathname; } catch { /* URL policy is checked separately. */ }
+  return {
+    surface: "web",
+    path,
+    title: observation.title,
+    visibleSignals: observation.controls.slice(0, 8).map((control) => redactDiscoveryText(control.name)),
+  };
 }
 
 export async function runDiscovery(options: {
@@ -334,17 +392,19 @@ export async function runDiscovery(options: {
   maxSteps?: number;
   runId?: string;
   now?: () => string;
+  resume?: DiscoveryResume;
+  humanActions?: HumanAction[];
   onEvidence?: (event: DiscoveryEvidenceEvent) => void;
 }): Promise<DiscoveryResult> {
-  const maxSteps = options.maxSteps ?? 8;
-  const runId = options.runId ?? crypto.randomUUID();
+  const maxSteps = options.maxSteps ?? DISCOVERY_MAX_STEPS;
+  const runId = options.resume?.runId ?? options.runId ?? crypto.randomUUID();
   const now = options.now ?? (() => new Date().toISOString());
-  const evidence: DiscoveryEvidenceEvent[] = [];
-  const history: DecisionContext["history"] = [];
-  const trace: RecordedAction[] = [];
-  const outputs: Record<string, string> = {};
-  let currentStep = 0;
-  let providerName = "unresolved";
+  const evidence: DiscoveryEvidenceEvent[] = options.resume ? [...options.resume.evidence] : [];
+  const history: DiscoveryHistoryEntry[] = options.resume ? [...options.resume.history] : [];
+  const trace: DiscoveryRecordedAction[] = options.resume ? [...options.resume.trace] : [];
+  const outputs: Record<string, string> = { ...(options.resume?.outputs ?? {}) };
+  let currentStep = options.resume?.step ?? 0;
+  let providerName = options.resume?.provider ?? "unresolved";
 
   const record = (event: Omit<DiscoveryEvidenceEvent, "sequence" | "at">) => {
     const complete = { ...event, sequence: evidence.length + 1, at: now() };
@@ -355,22 +415,29 @@ export async function runDiscovery(options: {
   try {
     const safeGoal = validateSupportedDiscoveryGoal(options.goal);
     const inputs = validateDiscoveryInputs(options.inputs);
-    if (!isAllowedTargetUrl(DISCOVERY_POLICY_CAPABILITY.target.entryPoint, options.origin, DISCOVERY_POLICY_CAPABILITY)) {
+    if (!isAllowedTargetUrl(DISCOVERY_TARGET_POLICY.target.entryPoint, options.origin, DISCOVERY_TARGET_POLICY)) {
       throw new AutomationError("policy_denied", "policy_denied", "Discovery entry point is outside the route allowlist.");
     }
-    record({ phase: "policy", step: 0, outcome: "ok", detail: "Goal, inputs, target route, action set, and read-only risk policy approved." });
-    await options.adapter.prepare(DISCOVERY_POLICY_CAPABILITY.target.entryPoint);
+    if (!options.resume) {
+      record({ phase: "policy", step: 0, outcome: "ok", detail: "Goal, inputs, target route, action set, and read-only risk policy approved." });
+      await options.adapter.prepare(DISCOVERY_TARGET_POLICY.target.entryPoint);
+    } else {
+      for (const action of options.humanActions ?? []) {
+        record({ phase: "handoff", step: currentStep, outcome: "ok", detail: `Human ${action.kind} on ${redactDiscoveryText(action.control)}; values were not recorded.`, provider: providerName });
+      }
+      record({ phase: "resume", step: currentStep, outcome: "ok", detail: "Human returned control; target policy and live-session context revalidated.", provider: providerName });
+    }
     const startedAt = Date.now();
 
-    for (currentStep = 1; currentStep <= maxSteps; currentStep += 1) {
-      if (Date.now() - startedAt > DISCOVERY_POLICY_CAPABILITY.policy.runTimeoutMs) {
+    for (currentStep = options.resume?.step ?? 1; currentStep <= maxSteps; currentStep += 1) {
+      if (Date.now() - startedAt > DISCOVERY_TIMEOUT_MS) {
         throw new AutomationError("discovery_timeout", "recoverable", "Discovery exceeded its total timeout.", true);
       }
-      if (!isAllowedTargetUrl(options.adapter.currentUrl(), options.origin, DISCOVERY_POLICY_CAPABILITY)) {
+      if (!isAllowedTargetUrl(options.adapter.currentUrl(), options.origin, DISCOVERY_TARGET_POLICY)) {
         throw new AutomationError("policy_denied", "policy_denied", "Discovery left the target route allowlist.");
       }
       const observation = await options.adapter.observe();
-      record({ phase: "observe", step: currentStep, outcome: "ok", detail: `Observed ${observation.controls.length} policy-known controls; values remain local.` });
+      record({ phase: "observe", step: currentStep, outcome: "ok", detail: `Observed ${observation.controls.length} sanitized live controls with DOM-derived locator candidates; values remain local.` });
       const context: DecisionContext = {
         goal: safeGoal,
         step: currentStep,
@@ -385,88 +452,104 @@ export async function runDiscovery(options: {
       const decision = validateDiscoveryDecision(providerDecision.decision, context);
       record({ phase: "decide", step: currentStep, outcome: "ok", detail: decision.reason, provider: providerName });
 
+      if (decision.action === "business_outcome") {
+        record({ phase: "act", step: currentStep, outcome: "business_outcome", detail: "Model identified the declared member_not_found state from the live surface.", provider: providerName });
+        return { runId, status: "business_outcome", provider: providerName, code: "member_not_found", message: "No member matched the supplied identifier.", evidence };
+      }
+      if (decision.action === "request_human") {
+        throw new HumanInterventionError(
+          "operator_acknowledgment_required",
+          "Discovery identified an operator-only acknowledgment and routed the same live session to a human.",
+          interventionSnapshot(observation),
+        );
+      }
       if (decision.action === "complete") {
-        if (!(await options.adapter.verify("member_summary")) || !outputs.balance || !outputs.accountStatus) {
+        if (!decision.target || !(await options.adapter.verify(decision.target)) || !outputs.balance || !outputs.accountStatus) {
           throw new AutomationError("goal_not_verified", "hard_failure", "The model declared completion before outputs and checkpoint were verified.");
         }
         const artifact = compileDiscoveredCapability({
           goal: safeGoal,
           provider: providerName,
           trace,
+          checkpointTarget: decision.target,
           capabilityName: decision.capabilityName,
           generatedAt: now(),
         });
-        record({ phase: "compile", step: currentStep, outcome: "ok", detail: `Compiled and validated ${artifact.name}@${artifact.version} from ${trace.length} recorded actions.`, provider: providerName });
+        record({ phase: "compile", step: currentStep, outcome: "ok", detail: `Compiled and validated ${artifact.name}@${artifact.version} from ${trace.length} model-selected live-surface actions.`, provider: providerName });
         record({ phase: "complete", step: currentStep, outcome: "ok", detail: "Goal verified; capability artifact and declared outputs are ready.", provider: providerName });
         return { runId, status: "success", provider: providerName, outputs, artifact, evidence };
       }
 
       const result = await options.adapter.execute(decision, inputs);
-      const recorded = { action: decision.action, targetId: decision.targetId, input: decision.input, output: decision.output } as RecordedAction;
-      history.push(recorded);
+      const recorded: DiscoveryRecordedAction = { action: decision.action, target: decision.target, controlRef: decision.controlRef, input: decision.input, output: decision.output };
+      history.push({ action: decision.action, controlRef: decision.controlRef, targetName: decision.target?.description ?? null, input: decision.input, output: decision.output });
       trace.push(recorded);
 
-      if (result.outcome === "business_outcome") {
-        record({ phase: "act", step: currentStep, outcome: "business_outcome", detail: "Detected declared member_not_found outcome.", provider: providerName });
-        return {
-          runId,
-          status: "business_outcome",
-          provider: providerName,
-          code: "member_not_found",
-          message: "No member matched the supplied identifier.",
-          evidence,
-        };
-      }
       if (decision.action === "extract" && decision.output && result.value) outputs[decision.output] = result.value;
       const detail = decision.action === "type"
-        ? `Entered redacted ${decision.input} using ${result.locator}.`
+        ? `Entered redacted ${decision.input} using discovered ${result.locator}.`
         : decision.action === "extract"
-          ? `Extracted declared ${decision.output} output locally${result.locator ? ` using ${result.locator}` : ""}.`
-          : decision.action === "wait_for_outcome"
-            ? "Observed a declared successful member lookup outcome."
-            : `Activated ${decision.targetId} using ${result.locator}.`;
+          ? `Extracted declared ${decision.output} output locally using discovered ${result.locator}.`
+          : decision.action === "wait_for_change"
+            ? "Observed the live surface change after submission."
+            : `Activated the model-selected ${decision.target?.description} using discovered ${result.locator}.`;
       record({ phase: "act", step: currentStep, outcome: "ok", detail, provider: providerName });
     }
     throw new AutomationError("max_steps_exceeded", "recoverable", "Discovery reached its maximum step count.", true);
   } catch (error) {
+    if (error instanceof HumanInterventionError) {
+      record({ phase: "handoff", step: currentStep, outcome: "intervention", detail: error.message, provider: providerName });
+      const resume: DiscoveryResume = { runId, step: currentStep, history: [...history], trace: [...trace], outputs: { ...outputs }, evidence: [...evidence], provider: providerName };
+      return { runId, status: "human_required", provider: providerName, intervention: { code: error.code, message: error.message, step: currentStep, snapshot: error.snapshot }, resume, evidence };
+    }
     const automationError = error instanceof AutomationError
       ? error
       : new AutomationError("unexpected_error", "hard_failure", error instanceof Error ? error.message : "Unknown discovery error.");
     record({ phase: "complete", step: currentStep, outcome: "error", detail: automationError.message, provider: providerName });
-    return {
-      runId,
-      status: "failure",
-      provider: providerName,
-      error: { code: automationError.code, message: automationError.message, step: currentStep, retryable: automationError.retryable },
-      evidence,
-    };
+    return { runId, status: "failure", provider: providerName, error: { code: automationError.code, message: automationError.message, step: currentStep, retryable: automationError.retryable }, evidence };
   }
+}
+
+function modelTarget(control: ObservedControl) {
+  return { controlRef: control.ref, locators: control.locatorCandidates.slice(0, 2) };
+}
+
+function simulatedRawDecision(context: DecisionContext): Record<string, unknown> {
+  const acted = new Set(context.history.map((item) => `${item.action}:${item.output ?? item.input ?? ""}`));
+  const controls = context.observation.controls;
+  const base = { input: null, output: null, businessCode: null, interventionCode: null, capabilityName: null };
+  const notFound = controls.find((control) => /not found|no member matched/i.test(`${control.name} ${control.context}`));
+  if (notFound) return { ...base, ...modelTarget(notFound), action: "business_outcome", businessCode: "member_not_found", reason: "The live surface shows the declared member-not-found business outcome." };
+  const dialog = controls.find((control) => control.role === "dialog" && /authori[sz]ation|acknowledg|restricted/i.test(`${control.name} ${control.context}`));
+  if (dialog) return { ...base, ...modelTarget(dialog), action: "request_human", interventionCode: "operator_acknowledgment_required", reason: "The live surface requires an operator-only acknowledgment." };
+  if (!acted.has("type:memberId")) {
+    const control = controls.find((item) => item.role === "textbox" && /member number|member id/i.test(`${item.name} ${item.context}`));
+    if (control) return { ...base, ...modelTarget(control), action: "type", input: "memberId", reason: "The observed member-number field matches the declared sensitive input." };
+  }
+  if (!context.history.some((item) => item.action === "click")) {
+    const control = controls.find((item) => item.role === "button" && /retrieve|find|search|lookup/i.test(item.name) && item.enabled !== false);
+    if (control) return { ...base, ...modelTarget(control), action: "click", reason: "The observed lookup button submits the populated member inquiry." };
+  }
+  if (!context.history.some((item) => item.action === "wait_for_change")) {
+    return { ...base, action: "wait_for_change", controlRef: null, locators: [], reason: "Wait for the submitted surface to reveal a result, error, or intervention." };
+  }
+  if (!acted.has("extract:balance")) {
+    const control = controls.find((item) => item.role === "text" && /current balance|savings balance/i.test(`${item.name} ${item.context}`) && item.hasValue);
+    if (control) return { ...base, ...modelTarget(control), action: "extract", output: "balance", reason: "The observed savings-row balance cell matches the declared currency output." };
+  }
+  if (!acted.has("extract:accountStatus")) {
+    const control = controls.find((item) => item.role === "text" && /account status|status cell/i.test(`${item.name} ${item.context}`) && item.hasValue);
+    if (control) return { ...base, ...modelTarget(control), action: "extract", output: "accountStatus", reason: "The observed savings-row status cell matches the remaining declared output." };
+  }
+  const checkpoint = controls.find((item) => item.role === "region" && /member.*account summary|account summary/i.test(`${item.name} ${item.context}`));
+  if (checkpoint) return { ...base, ...modelTarget(checkpoint), action: "complete", capabilityName: "get_savings_balance", reason: "Both outputs are recorded and the observed member-summary region is a verifiable checkpoint." };
+  return { ...base, action: "wait_for_change", controlRef: null, locators: [], reason: "The required control is not yet visible; wait for another live-surface change." };
 }
 
 export function createSimulatedDiscoveryProvider(): DiscoveryProvider {
   return {
     async decide(context) {
-      const actions = context.history.map((item) => `${item.action}:${item.output ?? item.targetId}`);
-      let decision: DiscoveryDecision;
-      if (!actions.includes("type:member_number")) {
-        decision = { action: "type", targetId: "member_number", input: "memberId", output: null, reason: "The member lookup form requires the declared memberId input.", capabilityName: null };
-      } else if (!actions.includes("click:retrieve_record")) {
-        decision = { action: "click", targetId: "retrieve_record", input: null, output: null, reason: "The lookup form is ready, so submit the member inquiry.", capabilityName: null };
-      } else if (!actions.includes("wait_for_outcome:member_summary")) {
-        decision = { action: "wait_for_outcome", targetId: "member_summary", input: null, output: null, reason: "Wait for either the declared member summary or not-found outcome.", capabilityName: null };
-      } else if (!actions.includes("extract:balance")) {
-        decision = { action: "extract", targetId: "savings_balance", input: null, output: "balance", reason: "The member summary is visible; extract the declared savings balance locally.", capabilityName: null };
-      } else if (!actions.includes("extract:accountStatus")) {
-        decision = { action: "extract", targetId: "account_status", input: null, output: "accountStatus", reason: "Extract the remaining declared account status locally.", capabilityName: null };
-      } else {
-        decision = { action: "complete", targetId: "member_summary", input: null, output: null, reason: "Both outputs are present and the success checkpoint can now be verified.", capabilityName: "get_savings_balance" };
-      }
-      return { provider: "safe-simulator", decision };
+      return { provider: "safe-simulator", decision: validateDiscoveryDecision(simulatedRawDecision(context), context) };
     },
   };
 }
-
-export const DISCOVERY_OUTCOMES: OutcomeDefinition[] = [
-  { kind: "success", target: TARGET_CATALOG.member_summary },
-  { kind: "business_outcome", code: "member_not_found", target: TARGET_CATALOG.member_not_found },
-];

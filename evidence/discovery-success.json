@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1.0",
   "scenario": "goal-driven savings lookup discovery",
-  "artifact": "get_savings_balance@1.1.0",
+  "artifact": "get_savings_balance@1.2.0",
   "generatedBy": "scripts/generate-evidence.mjs",
   "sensitiveValuesStored": false,
   "modelTranscriptStored": false,
@@ -16,7 +16,7 @@
     "artifact": {
       "schemaVersion": "1.0",
       "name": "get_savings_balance",
-      "version": "1.1.0",
+      "version": "1.2.0",
       "description": "Discovered from goal: Look up member {{memberId}} and return the current savings balance and account status.",
       "target": {
         "surface": "web",
@@ -64,7 +64,7 @@
           "action": "type",
           "input": "memberId",
           "target": {
-            "description": "Member Number input",
+            "description": "Member Number — Account inquiry form",
             "locators": [
               {
                 "kind": "name",
@@ -72,7 +72,7 @@
               },
               {
                 "kind": "css",
-                "value": "input[maxlength='5']"
+                "value": "form input"
               }
             ]
           }
@@ -81,7 +81,7 @@
           "id": "step_2_submit_lookup",
           "action": "click",
           "target": {
-            "description": "Retrieve Record button",
+            "description": "Retrieve Record — Account inquiry form",
             "locators": [
               {
                 "kind": "button_text",
@@ -102,15 +102,15 @@
             {
               "kind": "success",
               "target": {
-                "description": "Member summary panel",
+                "description": "Member account summary — Lookup result",
                 "locators": [
                   {
                     "kind": "css",
-                    "value": "#member-summary"
+                    "value": ".member-result"
                   },
                   {
                     "kind": "css",
-                    "value": ".member-result"
+                    "value": ".legacy-window.member-result"
                   }
                 ]
               }
@@ -119,15 +119,15 @@
               "kind": "business_outcome",
               "code": "member_not_found",
               "target": {
-                "description": "Member not found message",
+                "description": "Member-not-found business outcome",
                 "locators": [
                   {
                     "kind": "css",
-                    "value": "#not-found"
+                    "value": ".legacy-message"
                   },
                   {
                     "kind": "css",
-                    "value": ".legacy-message"
+                    "value": ".legacy-content > .legacy-message"
                   }
                 ]
               }
@@ -139,15 +139,15 @@
           "action": "extract",
           "output": "balance",
           "target": {
-            "description": "Regular savings current balance cell",
+            "description": "Current Balance cell — Account row: REGULAR SAVINGS",
             "locators": [
               {
                 "kind": "css",
-                "value": ".accounts-grid tbody tr .savings-balance"
+                "value": ".savings-balance"
               },
               {
                 "kind": "css",
-                "value": "#member-summary .money"
+                "value": ".accounts-grid td:nth-of-type(3)"
               }
             ]
           }
@@ -157,15 +157,15 @@
           "action": "extract",
           "output": "accountStatus",
           "target": {
-            "description": "Regular savings status cell",
+            "description": "Status cell — Account row: REGULAR SAVINGS",
             "locators": [
               {
                 "kind": "css",
-                "value": ".accounts-grid tbody tr .account-status"
+                "value": ".account-status"
               },
               {
                 "kind": "css",
-                "value": "#member-summary .accounts-grid td:nth-child(4)"
+                "value": ".accounts-grid td:nth-of-type(4)"
               }
             ]
           }
@@ -174,15 +174,15 @@
       "checkpoint": {
         "kind": "element_visible",
         "target": {
-          "description": "Member summary panel",
+          "description": "Member account summary — Lookup result",
           "locators": [
             {
               "kind": "css",
-              "value": "#member-summary"
+              "value": ".member-result"
             },
             {
               "kind": "css",
-              "value": ".member-result"
+              "value": ".legacy-window.member-result"
             }
           ]
         }
@@ -213,7 +213,7 @@
         "phase": "observe",
         "step": 1,
         "outcome": "ok",
-        "detail": "Observed 2 policy-known controls; values remain local.",
+        "detail": "Observed 4 sanitized live controls with DOM-derived locator candidates; values remain local.",
         "sequence": 2,
         "at": "2026-08-29T14:00:01.000Z"
       },
@@ -221,7 +221,7 @@
         "phase": "decide",
         "step": 1,
         "outcome": "ok",
-        "detail": "The member lookup form requires the declared memberId input.",
+        "detail": "The observed member-number field matches the declared sensitive input.",
         "provider": "safe-simulator",
         "sequence": 3,
         "at": "2026-08-29T14:00:02.000Z"
@@ -230,7 +230,7 @@
         "phase": "act",
         "step": 1,
         "outcome": "ok",
-        "detail": "Entered redacted memberId using name:member_number.",
+        "detail": "Entered redacted memberId using discovered name:member_number.",
         "provider": "safe-simulator",
         "sequence": 4,
         "at": "2026-08-29T14:00:03.000Z"
@@ -239,7 +239,7 @@
         "phase": "observe",
         "step": 2,
         "outcome": "ok",
-        "detail": "Observed 2 policy-known controls; values remain local.",
+        "detail": "Observed 4 sanitized live controls with DOM-derived locator candidates; values remain local.",
         "sequence": 5,
         "at": "2026-08-29T14:00:04.000Z"
       },
@@ -247,7 +247,7 @@
         "phase": "decide",
         "step": 2,
         "outcome": "ok",
-        "detail": "The lookup form is ready, so submit the member inquiry.",
+        "detail": "The observed lookup button submits the populated member inquiry.",
         "provider": "safe-simulator",
         "sequence": 6,
         "at": "2026-08-29T14:00:05.000Z"
@@ -256,7 +256,7 @@
         "phase": "act",
         "step": 2,
         "outcome": "ok",
-        "detail": "Activated retrieve_record using button_text:Retrieve Record.",
+        "detail": "Activated the model-selected Retrieve Record — Account inquiry form using discovered button_text:Retrieve Record.",
         "provider": "safe-simulator",
         "sequence": 7,
         "at": "2026-08-29T14:00:06.000Z"
@@ -265,7 +265,7 @@
         "phase": "observe",
         "step": 3,
         "outcome": "ok",
-        "detail": "Observed 2 policy-known controls; values remain local.",
+        "detail": "Observed 4 sanitized live controls with DOM-derived locator candidates; values remain local.",
         "sequence": 8,
         "at": "2026-08-29T14:00:07.000Z"
       },
@@ -273,7 +273,7 @@
         "phase": "decide",
         "step": 3,
         "outcome": "ok",
-        "detail": "Wait for either the declared member summary or not-found outcome.",
+        "detail": "Wait for the submitted surface to reveal a result, error, or intervention.",
         "provider": "safe-simulator",
         "sequence": 9,
         "at": "2026-08-29T14:00:08.000Z"
@@ -282,7 +282,7 @@
         "phase": "act",
         "step": 3,
         "outcome": "ok",
-        "detail": "Observed a declared successful member lookup outcome.",
+        "detail": "Observed the live surface change after submission.",
         "provider": "safe-simulator",
         "sequence": 10,
         "at": "2026-08-29T14:00:09.000Z"
@@ -291,7 +291,7 @@
         "phase": "observe",
         "step": 4,
         "outcome": "ok",
-        "detail": "Observed 5 policy-known controls; values remain local.",
+        "detail": "Observed 7 sanitized live controls with DOM-derived locator candidates; values remain local.",
         "sequence": 11,
         "at": "2026-08-29T14:00:10.000Z"
       },
@@ -299,7 +299,7 @@
         "phase": "decide",
         "step": 4,
         "outcome": "ok",
-        "detail": "The member summary is visible; extract the declared savings balance locally.",
+        "detail": "The observed savings-row balance cell matches the declared currency output.",
         "provider": "safe-simulator",
         "sequence": 12,
         "at": "2026-08-29T14:00:11.000Z"
@@ -308,7 +308,7 @@
         "phase": "act",
         "step": 4,
         "outcome": "ok",
-        "detail": "Extracted declared balance output locally using css:.accounts-grid tbody tr .savings-balance.",
+        "detail": "Extracted declared balance output locally using discovered css:.savings-balance.",
         "provider": "safe-simulator",
         "sequence": 13,
         "at": "2026-08-29T14:00:12.000Z"
@@ -317,7 +317,7 @@
         "phase": "observe",
         "step": 5,
         "outcome": "ok",
-        "detail": "Observed 5 policy-known controls; values remain local.",
+        "detail": "Observed 7 sanitized live controls with DOM-derived locator candidates; values remain local.",
         "sequence": 14,
         "at": "2026-08-29T14:00:13.000Z"
       },
@@ -325,7 +325,7 @@
         "phase": "decide",
         "step": 5,
         "outcome": "ok",
-        "detail": "Extract the remaining declared account status locally.",
+        "detail": "The observed savings-row status cell matches the remaining declared output.",
         "provider": "safe-simulator",
         "sequence": 15,
         "at": "2026-08-29T14:00:14.000Z"
@@ -334,7 +334,7 @@
         "phase": "act",
         "step": 5,
         "outcome": "ok",
-        "detail": "Extracted declared accountStatus output locally using css:.accounts-grid tbody tr .account-status.",
+        "detail": "Extracted declared accountStatus output locally using discovered css:.account-status.",
         "provider": "safe-simulator",
         "sequence": 16,
         "at": "2026-08-29T14:00:15.000Z"
@@ -343,7 +343,7 @@
         "phase": "observe",
         "step": 6,
         "outcome": "ok",
-        "detail": "Observed 5 policy-known controls; values remain local.",
+        "detail": "Observed 7 sanitized live controls with DOM-derived locator candidates; values remain local.",
         "sequence": 17,
         "at": "2026-08-29T14:00:16.000Z"
       },
@@ -351,7 +351,7 @@
         "phase": "decide",
         "step": 6,
         "outcome": "ok",
-        "detail": "Both outputs are present and the success checkpoint can now be verified.",
+        "detail": "Both outputs are recorded and the observed member-summary region is a verifiable checkpoint.",
         "provider": "safe-simulator",
         "sequence": 18,
         "at": "2026-08-29T14:00:17.000Z"
@@ -360,7 +360,7 @@
         "phase": "compile",
         "step": 6,
         "outcome": "ok",
-        "detail": "Compiled and validated get_savings_balance@1.1.0 from 5 recorded actions.",
+        "detail": "Compiled and validated get_savings_balance@1.2.0 from 5 model-selected live-surface actions.",
         "provider": "safe-simulator",
         "sequence": 19,
         "at": "2026-08-29T14:00:19.000Z"

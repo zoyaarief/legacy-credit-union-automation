@@ -258,7 +258,7 @@ function validateInputs(capability: Capability, inputs: Record<string, unknown>)
   return normalized;
 }
 
-export function isAllowedTargetUrl(rawUrl: string, origin: string, capability: Capability): boolean {
+export function isAllowedTargetUrl(rawUrl: string, origin: string, capability: Pick<Capability, "target">): boolean {
   let url: URL;
   try {
     url = new URL(rawUrl, origin);

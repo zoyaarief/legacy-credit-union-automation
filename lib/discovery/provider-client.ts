@@ -22,12 +22,15 @@ export function createAdaptiveDiscoveryProvider(fetchImpl: typeof fetch = fetch)
           body: JSON.stringify({ context }),
         });
       } catch {
-        useSimulator = true;
-        return simulator.decide(context);
+        throw new Error("The live discovery provider could not be reached.");
       }
       if (response.status === 503) {
-        useSimulator = true;
-        return simulator.decide(context);
+        const unavailable = await response.json().catch(() => null) as { error?: string; fallback?: string } | null;
+        if (unavailable?.error === "provider_unavailable" && unavailable.fallback === "safe-simulator") {
+          useSimulator = true;
+          return simulator.decide(context);
+        }
+        throw new Error("The live discovery provider is unavailable.");
       }
       const payload = await response.json() as ProviderResponse;
       if (!response.ok || !("decision" in payload)) {

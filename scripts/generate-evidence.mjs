@@ -15,8 +15,10 @@ function discoveryAdapter() {
   let state = "form";
   let filled = false;
   const formControls = () => [
-    { id: "member_number", role: "textbox", name: "Member Number input", visible: true, enabled: true, filled },
-    { id: "retrieve_record", role: "button", name: "Retrieve Record button", visible: true, enabled: true },
+    { ref: "surface-1", role: "textbox", name: "Member Number", context: "Account inquiry form", visible: true, enabled: true, filled, locatorCandidates: [{ kind: "name", value: "member_number" }, { kind: "css", value: "form input" }] },
+    { ref: "surface-2", role: "button", name: "Retrieve Record", context: "Account inquiry form", visible: true, enabled: true, locatorCandidates: [{ kind: "button_text", value: "Retrieve Record" }, { kind: "css", value: "form button[type='submit']" }] },
+    { ref: "surface-3", role: "combobox", name: "Inquiry Type", context: "Account inquiry form", visible: true, enabled: true, locatorCandidates: [{ kind: "name", value: "inquiry_type" }, { kind: "css", value: "form select" }] },
+    { ref: "surface-4", role: "button", name: "Clear", context: "Reset the form", visible: true, enabled: true, locatorCandidates: [{ kind: "button_text", value: "Clear" }, { kind: "css", value: "form button[type='button']" }] },
   ];
   return {
     async prepare() { state = "form"; filled = false; },
@@ -25,9 +27,9 @@ function discoveryAdapter() {
       const controls = state === "summary"
         ? [
             ...formControls(),
-            { id: "member_summary", role: "region", name: "Member summary panel", visible: true },
-            { id: "savings_balance", role: "text", name: "Savings balance", visible: true, hasValue: true },
-            { id: "account_status", role: "text", name: "Account status", visible: true, hasValue: true },
+            { ref: "surface-5", role: "region", name: "Member account summary", context: "Lookup result", visible: true, locatorCandidates: [{ kind: "css", value: ".member-result" }, { kind: "css", value: ".legacy-window.member-result" }] },
+            { ref: "surface-6", role: "text", name: "Current Balance cell", context: "Account row: REGULAR SAVINGS", visible: true, hasValue: true, locatorCandidates: [{ kind: "css", value: ".savings-balance" }, { kind: "css", value: ".accounts-grid td:nth-of-type(3)" }] },
+            { ref: "surface-7", role: "text", name: "Status cell", context: "Account row: REGULAR SAVINGS", visible: true, hasValue: true, locatorCandidates: [{ kind: "css", value: ".account-status" }, { kind: "css", value: ".accounts-grid td:nth-of-type(4)" }] },
           ]
         : formControls();
       return { url: `${origin}/legacy`, title: "Northstar Core Member Services", controls };
@@ -35,11 +37,11 @@ function discoveryAdapter() {
     async execute(decision, inputs) {
       if (decision.action === "type") { filled = Boolean(inputs.memberId); return { locator: "name:member_number" }; }
       if (decision.action === "click") { state = "loading"; return { locator: "button_text:Retrieve Record" }; }
-      if (decision.action === "wait_for_outcome") { state = "summary"; return { outcome: "success" }; }
-      if (decision.targetId === "savings_balance") return { value: "$2,458.17", locator: "css:.accounts-grid tbody tr .savings-balance" };
-      return { value: "Active", locator: "css:.accounts-grid tbody tr .account-status" };
+      if (decision.action === "wait_for_change") { state = "summary"; return {}; }
+      if (decision.output === "balance") return { value: "$2,458.17", locator: "css:.savings-balance" };
+      return { value: "Active", locator: "css:.account-status" };
     },
-    async verify(targetId) { return targetId === "member_summary" && state === "summary"; },
+    async verify(target) { return state === "summary" && target.locators.some((item) => item.value === ".member-result"); },
   };
 }
 
@@ -70,11 +72,11 @@ function replayAdapter({ notFound = false, intervention = false } = {}) {
   return { adapter, acknowledge: () => { blocked = false; } };
 }
 
-function envelope(scenario, result) {
+function envelope(scenario, result, usedArtifact = artifact) {
   return {
     schemaVersion: "1.0",
     scenario,
-    artifact: `${artifact.name}@${artifact.version}`,
+    artifact: `${usedArtifact.name}@${usedArtifact.version}`,
     generatedBy: "scripts/generate-evidence.mjs",
     sensitiveValuesStored: false,
     modelTranscriptStored: false,
@@ -134,7 +136,7 @@ const handoffResult = await executeCapability({
 });
 
 const files = [
-  ["discovery-success.json", envelope("goal-driven savings lookup discovery", discovery)],
+  ["discovery-success.json", envelope("goal-driven savings lookup discovery", discovery, discovery.status === "success" ? discovery.artifact : artifact)],
   ["replay-success.json", envelope("generated artifact deterministic replay", replayResult)],
   ["replay-not-found.json", envelope("generated artifact known business outcome", notFoundResult)],
   ["handoff-success.json", envelope("restricted-account same-session human handoff", handoffResult)],

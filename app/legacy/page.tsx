@@ -20,12 +20,8 @@ export default function LegacyPortal() {
 
   useEffect(() => {
     const selected = new URLSearchParams(window.location.search).get("variant") === "east" ? "east" : "main";
-    let readinessFrame = 0;
-    const variantFrame = window.requestAnimationFrame(() => {
-      setVariant(selected);
-      readinessFrame = window.requestAnimationFrame(() => { document.documentElement.dataset.automationReady = "true"; });
-    });
-    return () => { window.cancelAnimationFrame(variantFrame); window.cancelAnimationFrame(readinessFrame); delete document.documentElement.dataset.automationReady; };
+    const variantFrame = window.requestAnimationFrame(() => setVariant(selected));
+    return () => window.cancelAnimationFrame(variantFrame);
   }, []);
 
   function search(event:FormEvent<HTMLFormElement>) {
@@ -62,15 +58,15 @@ export default function LegacyPortal() {
           <div className="legacy-actions"><button type="submit" disabled={loading}>{loading?"PLEASE WAIT...":variant === "east" ? "Find Member" : "Retrieve Record"}</button><button type="button" onClick={()=>{setMemberNumber("");setMember(null);setSearched(false);setPermissionPending(false);setFaultState(null)}}>Clear</button></div>
         </form>
       </div>
-      {permissionPending && <div id="permission-dialog" className="legacy-dialog" role="dialog" aria-labelledby="permission-title">
+      {permissionPending && <div className="legacy-dialog" role="dialog" aria-labelledby="permission-title">
         <div id="permission-title" className="legacy-dialog-title">ADDITIONAL AUTHORIZATION REQUIRED</div>
         <p>This restricted account requires an operator acknowledgment before the inquiry can continue.</p>
         <div className="legacy-actions"><button type="button" onClick={approveRestrictedLookup}>Continue lookup</button></div>
       </div>}
-      {faultState === "session_expired" && <div id="session-expired" className="legacy-message"><strong>SESSION 401:</strong> OPERATOR SESSION EXPIRED. SIGN IN AGAIN BEFORE RETRY.</div>}
-      {faultState === "application_error" && <div id="application-error" className="legacy-message"><strong>SYSTEM 500:</strong> CORE MEMBER SERVICES IS UNAVAILABLE.</div>}
-      {searched && !member && <div id="not-found" className="legacy-message"><strong>MESSAGE 104:</strong> MEMBER NUMBER NOT FOUND. VERIFY NUMBER AND RETRY.</div>}
-      {member && <div id="member-summary" className="legacy-window member-result">
+      {faultState === "session_expired" && <div className="legacy-message"><strong>SESSION 401:</strong> OPERATOR SESSION EXPIRED. SIGN IN AGAIN BEFORE RETRY.</div>}
+      {faultState === "application_error" && <div className="legacy-message"><strong>SYSTEM 500:</strong> CORE MEMBER SERVICES IS UNAVAILABLE.</div>}
+      {searched && !member && <div className="legacy-message"><strong>MESSAGE 104:</strong> MEMBER NUMBER NOT FOUND. VERIFY NUMBER AND RETRY.</div>}
+      {member && <div className="legacy-window member-result">
         <div className="legacy-window-title">Member / Account Summary</div>
         <table className="member-header"><tbody><tr><th>Member:</th><td>{member.id}</td><th>Name:</th><td>{member.name}</td></tr><tr><th>Branch:</th><td>001 - MAIN</td><th>Relationship:</th><td>PRIMARY</td></tr></tbody></table>
         <table className="accounts-grid"><thead><tr><th>Share</th><th>Description</th><th>Current Balance</th><th>Status</th><th>Last Activity</th></tr></thead><tbody><tr><td>{member.shareNumber}</td><td>REGULAR SAVINGS</td><td className="money savings-balance">{member.balance}</td><td className="account-status">{member.status}</td><td>{member.lastActivity}</td></tr></tbody></table>

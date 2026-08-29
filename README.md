@@ -5,11 +5,12 @@ The submission-ready system implements the complete discovery → capability →
 ## What works
 
 - Goal form and live legacy-credit-union target session
-- Observe–decide–act discovery with an eight-step and 20-second policy budget
+- Observe–decide–act discovery over a sanitized live DOM control inventory, with an eight-step and 20-second policy budget
 - Optional OpenAI Responses API provider using structured JSON and `store: false`
-- Explicit safe-simulator fallback when no API key is configured
-- Strict action, target, input, output, route, and sensitive-value validation
-- Explicit `unsupported_goal` rejection before navigation for out-of-scope or mutating intents
+- Explicit safe-simulator fallback only when the server declares that no API key is configured; network and provider failures remain visible
+- Observation-local control references plus DOM-derived locator candidates; no preassigned workflow target catalog
+- Strict action, observed-locator, input, output, route, and sensitive-value validation
+- Positive classification against the exact supported capability, with `unsupported_goal` rejection before navigation for every other intent
 - Automatic compilation into the versioned capability schema
 - Generated-artifact review and an enforced `draft → approved` gate bound to its SHA-256 fingerprint
 - Known `member_not_found` business outcome and final checkpoint verification
@@ -17,7 +18,7 @@ The submission-ready system implements the complete discovery → capability →
 - Redacted discovery and replay evidence; model transcripts are discarded
 - Explicit `automation → human_requested → human → resuming → completed` ownership model
 - Restricted-account intervention with a redacted surface snapshot
-- Human action capture without field values and deterministic same-session resume
+- Human action capture without field values and deterministic same-session resume during both discovery and replay
 - Per-user D1 run history with SHA-256 evidence integrity, 7/30/90-day expiry, deletion, and restorable capability artifacts
 - Injected session-expiry, slow-load timeout, and application-error paths
 - One clean retry for allowlisted recoverable failures; hard failures are never retried
@@ -42,8 +43,8 @@ The submission-ready system implements the complete discovery → capability →
 - Durable approve/reject decisions with fingerprint-bound reviewer progress
 - Executor-level fingerprint and quorum verification for risky approval grants
 - Reviewer queue and administrator role-assignment controls in the console
-- Unit coverage for replay, recovery, encryption, discovery, model validation, storage policy, artifact fingerprints, fault classification, and handoff transitions
-- Automated browser E2E coverage for unsupported goals, successful replay, locator evidence, checkpoints, and business outcomes
+- Unit coverage for replay, recovery, encryption, discovery, hostile reordered surfaces, invented-locator rejection, model validation, storage policy, artifact fingerprints, fault classification, and handoff transitions
+- Automated browser E2E coverage for semantic goal rejection, discovery handoff/resume, successful replay, locator evidence, checkpoints, and business outcomes
 
 ## Run locally
 
@@ -76,11 +77,12 @@ pnpm run dev
 Then open `http://localhost:3000` and run this exact flow:
 
 1. In **Discover**, keep the supplied goal, use member `12345`, and select **Discover capability**.
-2. Approve the generated artifact, switch to **Replay**, and select **Run capability**. The structured result must return `$2,458.17`, `Active`, and a verified checkpoint.
-3. Replay member `00000`. The result must be the `member_not_found` business outcome, not a failure.
-4. Replay `12345` with **session expired**. The run must recover once and then succeed. **Application error** must stop without retry.
-5. Open **Human handoff**, start the assisted replay, accept control, click **Continue lookup** inside the live target, and resume automation.
-6. Open **Agent API**, invoke the reviewed tenant capability, run the three-canary score, and optionally enqueue the invocation.
+2. In **Discover**, use member `31415`, accept discovery control, click **Continue lookup** inside the live target, and resume discovery in the same session.
+3. Approve the generated artifact, switch to **Replay**, and select **Run capability**. The structured result must return `$2,458.17`, `Active`, and a verified checkpoint.
+4. Replay member `00000`. The result must be the `member_not_found` business outcome, not a failure.
+5. Replay `12345` with **session expired**. The run must recover once and then succeed. **Application error** must stop without retry.
+6. Open **Human handoff**, start the assisted replay, accept control, click **Continue lookup** inside the live target, and resume automation.
+7. Open **Agent API**, invoke the reviewed tenant capability, run the three-canary score, and optionally enqueue the invocation.
 
 Without `OPENAI_API_KEY`, step 1 is clearly labeled `safe-simulator`. With the key configured, the same flow uses the server-only OpenAI decision provider.
 

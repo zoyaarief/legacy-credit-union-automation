@@ -9,12 +9,32 @@ async function openReadyConsole(page: Page) {
 
 test("unsupported goals are rejected before discovery acts", async ({ page }) => {
   await openReadyConsole(page);
-  await page.getByLabel("Goal").fill("Permanently close the member savings account and report its balance and status.");
+  await page.getByLabel("Goal").fill("Terminate the member savings account and report its balance and status.");
   await page.getByRole("button", { name: "Discover capability" }).click();
 
   await expect(page.locator(".discovery-result .failure-result strong")).toHaveText("unsupported_goal");
   await expect(page.locator(".discovery-result")).toContainText("supports only a read-only member savings balance");
   await expect(page.locator(".event-log")).toContainText("This discovery policy supports only");
+});
+
+test("discovery pauses for a human and resumes in the same target session", async ({ page }) => {
+  await openReadyConsole(page);
+  await page.getByLabel("Invocation input").fill("31415");
+  await page.getByRole("button", { name: "Discover capability" }).click();
+
+  await expect(page.locator(".discovery-result .intervention-card")).toContainText("operator_acknowledgment_required");
+  await page.getByRole("button", { name: "Accept discovery control" }).click();
+  await page.frameLocator('iframe[title="Legacy credit union member portal"]').getByRole("button", { name: "Continue lookup" }).click();
+  await expect(page.getByRole("button", { name: "Resume discovery" })).toBeEnabled();
+  await page.getByRole("button", { name: "Resume discovery" }).click();
+
+  await expect(page.locator(".discovery-result .success-result strong")).toHaveText("get_savings_balance");
+  await expect(page.locator(".event-log")).toContainText("Human returned control");
+  await expect(page.locator(".event-log")).toContainText("DOM-derived locator candidates");
+  await expect(page.locator(".artifact-inspector")).toContainText("1.2.0");
+  await expect(page.locator(".artifact-inspector pre")).toContainText('"value": "member_number"');
+  await expect(page.locator(".artifact-inspector pre")).toContainText('"value": ".savings-balance"');
+  await expect(page.locator(".ownership-strip strong")).toHaveText("completed");
 });
 
 test("reviewed capability replays success and business outcomes end to end", async ({ page }) => {

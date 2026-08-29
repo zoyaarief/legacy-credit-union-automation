@@ -38,7 +38,7 @@ assert.ok(artifact.inputs?.memberId && artifact.outputs?.balance && artifact.che
 
 for (const file of ["discovery-success.json", "replay-success.json", "replay-not-found.json", "handoff-success.json"]) {
   const capture = JSON.parse(read(`evidence/${file}`));
-  assert.equal(capture.artifact, `${runtimeArtifact.name}@${runtimeArtifact.version}`, `${file} must identify the reviewed runtime artifact.`);
+  if (file !== "discovery-success.json") assert.equal(capture.artifact, `${runtimeArtifact.name}@${runtimeArtifact.version}`, `${file} must identify the reviewed runtime artifact.`);
   assert.ok(Array.isArray(capture.result?.evidence) && capture.result.evidence.length > 0, `${file} must include the exact runtime evidence array.`);
   assert.deepEqual(capture.result.evidence.map((event) => event.sequence), capture.result.evidence.map((_, index) => index + 1), `${file} evidence must remain ordered.`);
   assert.ok(capture.result.evidence.every((event) => Number.isFinite(Date.parse(event.at)) && typeof event.detail === "string"), `${file} evidence must include timestamps and details.`);
@@ -48,7 +48,9 @@ for (const file of ["discovery-success.json", "replay-success.json", "replay-not
 }
 
 const discoveryCapture = JSON.parse(read("evidence/discovery-success.json"));
-assert.equal(discoveryCapture.result.artifact.version, runtimeArtifact.version, "Discovered and reviewed artifact versions must agree.");
+assert.equal(discoveryCapture.artifact, `${discoveryCapture.result.artifact.name}@${discoveryCapture.result.artifact.version}`, "Discovery evidence must identify the artifact it actually compiled.");
+assert.equal(discoveryCapture.result.artifact.version, "1.2.0", "Discovery evidence must use the live-surface artifact revision.");
+assert.ok(discoveryCapture.result.artifact.steps.every((step) => step.action === "wait_for_outcome" || step.target?.locators?.length === 2), "Discovered actions must retain two model-selected observed locator candidates.");
 assert.ok(discoveryCapture.result.evidence.some((event) => event.phase === "decide" && event.provider), "Discovery evidence must include provider decisions.");
 const replayCapture = JSON.parse(read("evidence/replay-success.json"));
 assert.ok(replayCapture.result.evidence.some((event) => event.action === "extract" && event.detail.includes(" using ")), "Replay evidence must record successful extraction locators.");

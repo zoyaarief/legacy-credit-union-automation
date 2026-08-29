@@ -15,15 +15,27 @@ type ResponsesApiPayload = {
 const DECISION_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["action", "targetId", "input", "output", "reason", "capabilityName"],
+  required: ["action", "controlRef", "locators", "input", "output", "businessCode", "interventionCode", "reason", "capabilityName"],
   properties: {
-    action: { type: "string", enum: ["type", "click", "wait_for_outcome", "extract", "complete"] },
-    targetId: {
-      type: ["string", "null"],
-      enum: ["member_number", "retrieve_record", "member_summary", "member_not_found", "savings_balance", "account_status", null],
+    action: { type: "string", enum: ["type", "click", "wait_for_change", "extract", "business_outcome", "request_human", "complete"] },
+    controlRef: { type: ["string", "null"], maxLength: 80 },
+    locators: {
+      type: "array",
+      maxItems: 2,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["kind", "value"],
+        properties: {
+          kind: { type: "string", enum: ["name", "css", "button_text"] },
+          value: { type: "string", maxLength: 240 },
+        },
+      },
     },
     input: { type: ["string", "null"], enum: ["memberId", null] },
     output: { type: ["string", "null"], enum: ["balance", "accountStatus", null] },
+    businessCode: { type: ["string", "null"], enum: ["member_not_found", null] },
+    interventionCode: { type: ["string", "null"], enum: ["operator_acknowledgment_required", null] },
     reason: { type: "string", maxLength: 240 },
     capabilityName: { type: ["string", "null"], maxLength: 80 },
   },
@@ -58,9 +70,11 @@ export async function decideWithOpenAI(options: {
       max_output_tokens: 400,
       instructions: [
         "You are the decision component of a read-only computer-use discovery agent.",
-        "Choose exactly one action from the provided contract based on the current observation and prior actions.",
-        "Never invent selectors, targets, inputs, outputs, or values. Never request or repeat sensitive values.",
-        "Use wait_for_outcome after submitting the lookup, extract outputs only when their controls are visible, and complete only after both outputs were extracted.",
+        "Identify controls semantically from the sanitized live control inventory; control refs are observation-local and are not preassigned workflow targets.",
+        "For a control action, select the observed controlRef and exactly two ordered locators copied from that control's locatorCandidates. Never invent a locator.",
+        "Choose wait_for_change with no control or locators after submitting; classify visible not-found and operator-only states explicitly.",
+        "Extract only declared outputs from visible value-bearing cells and complete only after both outputs were extracted and a summary region is visible.",
+        "Never request, repeat, or infer sensitive values; cell values stay local and are intentionally omitted from observations.",
         "Return a concise operational reason, not hidden reasoning or a chain-of-thought transcript.",
       ].join(" "),
       input: JSON.stringify(options.context),

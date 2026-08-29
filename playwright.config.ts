@@ -12,7 +12,7 @@ export default defineConfig({
     trace: "retain-on-failure",
   },
   webServer: {
-    command: "pnpm run dev",
+    command: "pnpm exec vinext dev --hostname 127.0.0.1",
     url: "http://127.0.0.1:3000",
     reuseExistingServer: true,
     timeout: 120_000,

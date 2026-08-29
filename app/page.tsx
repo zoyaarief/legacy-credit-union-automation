@@ -13,21 +13,21 @@ import {
   type ControlTarget,
   type EvidenceEvent,
   type HumanAction,
+  type Locator,
   type OutcomeDefinition,
   type ReplayResult,
   type ReplayResume,
   type SurfaceAdapter,
 } from "@/lib/automation/core";
 import {
-  DISCOVERY_OUTCOMES,
-  TARGET_CATALOG,
+  redactDiscoveryText,
   runDiscovery,
   type DiscoveryAdapter,
   type DiscoveryDecision,
   type DiscoveryEvidenceEvent,
+  type DiscoveryResume,
   type DiscoveryResult,
   type ObservedControl,
-  type TargetId,
 } from "@/lib/discovery/core";
 import { createAdaptiveDiscoveryProvider } from "@/lib/discovery/provider-client";
 import { INITIAL_HANDOFF_STATE, transitionHandoff, type HandoffState } from "@/lib/handoff/core";
@@ -106,9 +106,20 @@ async function reloadFrame(frame: HTMLIFrameElement, entryPoint: string, run: nu
     const timer = window.setTimeout(() => reject(new AutomationError("target_timeout", "recoverable", "Target load timed out.", true)), 5000);
     frame.onload = () => {
       const readinessDeadline = Date.now() + 2000;
+      let stableSince = 0;
+      let priorSignature = "";
       const checkReady = () => {
         try {
-          if (frame.contentDocument?.documentElement.dataset.automationReady === "true") {
+          const document = frame.contentDocument;
+          const interactive = document ? [...document.querySelectorAll("input, select, button")].filter(isElementVisible) : [];
+          const signature = interactive.map((element) => `${element.tagName}:${element.getAttribute("name") ?? ""}:${element.textContent?.trim() ?? ""}:${isElementEnabled(element)}`).join("|");
+          if (document?.readyState === "complete" && interactive.length >= 2 && signature === priorSignature) {
+            if (!stableSince) stableSince = Date.now();
+          } else {
+            stableSince = 0;
+            priorSignature = signature;
+          }
+          if (stableSince && Date.now() - stableSince >= 100) {
             window.clearTimeout(timer); resolve(); return;
           }
         } catch {
@@ -159,9 +170,10 @@ async function waitForOutcomes(frame: HTMLIFrameElement, outcomes: OutcomeDefini
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const document = getDocument(frame);
-    if (document.querySelector("#session-expired")) throw new AutomationError("session_expired", "recoverable", "The operator session expired before the result was available.", true);
-    if (document.querySelector("#application-error")) throw new AutomationError("application_unavailable", "hard_failure", "Core Member Services returned an application error.");
-    if (document.querySelector("#permission-dialog")) {
+    const visibleText = document.body.textContent ?? "";
+    if (/OPERATOR SESSION EXPIRED/i.test(visibleText)) throw new AutomationError("session_expired", "recoverable", "The operator session expired before the result was available.", true);
+    if (/CORE MEMBER SERVICES IS UNAVAILABLE/i.test(visibleText)) throw new AutomationError("application_unavailable", "hard_failure", "Core Member Services returned an application error.");
+    if ([...document.querySelectorAll("[role='dialog']")].some(isElementVisible)) {
       throw new HumanInterventionError(
         "operator_acknowledgment_required",
         "Automation paused at a restricted-account acknowledgment and routed the live session to an operator.",
@@ -189,10 +201,118 @@ function createReplayAdapter(frame: HTMLIFrameElement, nextRun: () => number, fa
   };
 }
 
-function observedControl(document: Document, id: TargetId, role: ObservedControl["role"], options: Partial<ObservedControl> = {}) {
-  const found = findTarget(document, TARGET_CATALOG[id]);
-  if (!found) return null;
-  return { id, role, name: TARGET_CATALOG[id].description, visible: true, ...options } satisfies ObservedControl;
+function uniqueLocatorCandidates(document: Document, element: Element): Locator[] {
+  const candidates: Locator[] = [];
+  const add = (candidate: Locator) => {
+    if (!candidates.some((item) => item.kind === candidate.kind && item.value === candidate.value)) candidates.push(candidate);
+  };
+  const name = element.getAttribute("name");
+  if (name) add({ kind: "name", value: name });
+  if (element.tagName === "BUTTON") {
+    const text = element.textContent?.trim();
+    if (text) add({ kind: "button_text", value: text });
+  }
+  if (element.id) add({ kind: "css", value: `#${CSS.escape(element.id)}` });
+  for (const className of element.classList) {
+    const selector = `.${CSS.escape(className)}`;
+    if (document.querySelectorAll(selector).length === 1) add({ kind: "css", value: selector });
+  }
+  if (element.classList.length > 1) {
+    const selector = [...element.classList].map((item) => `.${CSS.escape(item)}`).join("");
+    if (document.querySelectorAll(selector).length === 1) add({ kind: "css", value: selector });
+  }
+  const parts: string[] = [];
+  let current: Element | null = element;
+  while (current && current !== document.body) {
+    let part = current.tagName.toLowerCase();
+    const parentElement: Element | null = current.parentElement;
+    if (parentElement) {
+      const sameTag = [...parentElement.children].filter((item) => item.tagName === current?.tagName);
+      if (sameTag.length > 1) part += `:nth-of-type(${sameTag.indexOf(current) + 1})`;
+    }
+    parts.unshift(part);
+    const selector = parts.join(" > ");
+    if (document.querySelectorAll(selector).length === 1) add({ kind: "css", value: selector });
+    current = parentElement;
+  }
+  return candidates.slice(0, 4);
+}
+
+function observedControl(document: Document, element: Element, index: number): ObservedControl | null {
+  if (!isElementVisible(element)) return null;
+  const clean = (value: string) => redactDiscoveryText(value.replace(/\s+/g, " ").trim()).slice(0, 180);
+  let role: ObservedControl["role"];
+  let name = "";
+  let context = "";
+  if (element.tagName === "INPUT") {
+    role = "textbox";
+    name = element.closest("tr")?.querySelector("th")?.textContent ?? element.getAttribute("name") ?? "Text input";
+    context = "Editable field in the member inquiry form";
+  } else if (element.tagName === "SELECT") {
+    role = "combobox";
+    name = element.closest("tr")?.querySelector("th")?.textContent ?? element.getAttribute("name") ?? "Selection";
+    context = "Selection field in the member inquiry form";
+  } else if (element.tagName === "BUTTON") {
+    role = "button";
+    name = element.textContent ?? "Button";
+    context = element.closest("[role='dialog']") ? "Operator dialog action" : "Member inquiry action";
+  } else if (element.getAttribute("role") === "dialog") {
+    role = "dialog";
+    name = element.querySelector(".legacy-dialog-title")?.textContent ?? "Operator dialog";
+    context = element.querySelector("p")?.textContent ?? "Manual intervention surface";
+  } else if (element.classList.contains("legacy-message")) {
+    role = "status";
+    name = element.textContent ?? "Application status";
+    context = "Visible application outcome or error";
+  } else if (element.classList.contains("member-result")) {
+    role = "region";
+    name = element.querySelector(".legacy-window-title")?.textContent ?? "Result region";
+    context = "Visible member and account summary checkpoint";
+  } else if (["TD", "TH"].includes(element.tagName)) {
+    role = "text";
+    const cell = element as HTMLTableCellElement;
+    const table = element.closest("table");
+    const header = table?.querySelectorAll("thead th")[cell.cellIndex]?.textContent ?? "Result";
+    const description = element.parentElement?.children[1]?.textContent ?? "account row";
+    name = `${header} cell`;
+    context = `Account row: ${description}`;
+  } else {
+    return null;
+  }
+  const locatorCandidates = uniqueLocatorCandidates(document, element);
+  if (locatorCandidates.length < 2) return null;
+  return {
+    ref: `control-${index + 1}`,
+    role,
+    name: clean(name),
+    context: clean(context),
+    visible: true,
+    enabled: ["textbox", "combobox", "button"].includes(role) ? isElementEnabled(element) : undefined,
+    filled: element.tagName === "INPUT" ? Boolean((element as HTMLInputElement).value) : undefined,
+    hasValue: role === "text" ? Boolean(element.textContent?.trim()) : undefined,
+    locatorCandidates,
+  };
+}
+
+function discoverySurfaceSignature(document: Document) {
+  return [...document.querySelectorAll("input, select, button, [role='dialog'], .legacy-message, .member-result, .accounts-grid tbody td")]
+    .filter(isElementVisible)
+    .map((element) => `${element.tagName}:${element.textContent?.replace(/\s+/g, " ").trim()}:${isElementEnabled(element)}`)
+    .join("|");
+}
+
+async function waitForDiscoveryChange(frame: HTMLIFrameElement, timeoutMs: number) {
+  const initial = discoverySurfaceSignature(getDocument(frame));
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const document = getDocument(frame);
+    const visibleText = document.body.textContent ?? "";
+    if (/OPERATOR SESSION EXPIRED/i.test(visibleText)) throw new AutomationError("session_expired", "recoverable", "The operator session expired during discovery.", true);
+    if (/CORE MEMBER SERVICES IS UNAVAILABLE/i.test(visibleText)) throw new AutomationError("application_unavailable", "hard_failure", "Core Member Services returned an application error.");
+    if (discoverySurfaceSignature(document) !== initial) return;
+    await pause(100);
+  }
+  throw new AutomationError("outcome_timeout", "recoverable", "The live surface did not change before the discovery timeout.", true);
 }
 
 function createDiscoveryAdapter(frame: HTMLIFrameElement, nextRun: () => number): DiscoveryAdapter {
@@ -201,36 +321,30 @@ function createDiscoveryAdapter(frame: HTMLIFrameElement, nextRun: () => number)
     currentUrl: () => currentFrameUrl(frame),
     async observe() {
       const document = getDocument(frame);
-      const memberInput = findTarget(document, TARGET_CATALOG.member_number)?.element as HTMLInputElement | undefined;
-      const retrieveButton = findTarget(document, TARGET_CATALOG.retrieve_record)?.element as HTMLButtonElement | undefined;
-      const controls = [
-        observedControl(document, "member_number", "textbox", { enabled: memberInput ? isElementEnabled(memberInput) : false, filled: Boolean(memberInput?.value) }),
-        observedControl(document, "retrieve_record", "button", { enabled: retrieveButton ? isElementEnabled(retrieveButton) : false }),
-        observedControl(document, "member_summary", "region"), observedControl(document, "member_not_found", "status"),
-        observedControl(document, "savings_balance", "text", { hasValue: true }), observedControl(document, "account_status", "text", { hasValue: true }),
-      ].filter((control): control is ObservedControl => Boolean(control));
-      return { url: currentFrameUrl(frame), title: "Northstar Core Member Services", controls };
+      const elements = [...document.querySelectorAll("input, select, button, [role='dialog'], .legacy-message, .member-result, .accounts-grid tbody td")];
+      const controls = elements.map((element, index) => observedControl(document, element, index)).filter((control): control is ObservedControl => Boolean(control));
+      return { url: currentFrameUrl(frame), title: document.title || "Northstar Core Member Services", controls };
     },
     async execute(decision: DiscoveryDecision, inputs: Record<string, string>) {
-      if (!decision.targetId) throw new AutomationError("model_contract_invalid", "hard_failure", "Decision target is missing.");
+      if (decision.action === "wait_for_change") {
+        await waitForDiscoveryChange(frame, 5000);
+        return {};
+      }
+      if (!decision.target) throw new AutomationError("model_contract_invalid", "hard_failure", "Decision target is missing.");
       if (decision.action === "type") {
         if (!decision.input) throw new AutomationError("model_contract_invalid", "hard_failure", "Decision input is missing.");
-        return { locator: await typeIntoTarget(frame, TARGET_CATALOG[decision.targetId], inputs[decision.input]) };
+        return { locator: await typeIntoTarget(frame, decision.target, inputs[decision.input]) };
       }
-      if (decision.action === "click") return { locator: await clickTarget(frame, TARGET_CATALOG[decision.targetId]) };
-      if (decision.action === "wait_for_outcome") {
-        const outcome = await waitForOutcomes(frame, DISCOVERY_OUTCOMES, 5000);
-        return outcome.kind === "business_outcome" ? { outcome: "business_outcome", businessCode: outcome.code } : { outcome: "success" };
-      }
+      if (decision.action === "click") return { locator: await clickTarget(frame, decision.target) };
       if (decision.action === "extract") {
-        const found = requireTarget(getDocument(frame), TARGET_CATALOG[decision.targetId]);
+        const found = requireTarget(getDocument(frame), decision.target);
         const value = found.element.textContent?.trim() ?? "";
         if (!value) throw new AutomationError("output_missing", "hard_failure", `${decision.output} was empty.`);
         return { value, locator: found.locator };
       }
       throw new AutomationError("model_contract_invalid", "hard_failure", "Complete actions are verified by the discovery engine.");
     },
-    async verify(targetId) { return Boolean(findTarget(getDocument(frame), TARGET_CATALOG[targetId])); },
+    async verify(target) { return Boolean(findTarget(getDocument(frame), target)); },
   };
 }
 
@@ -253,7 +367,7 @@ function toReplayLog(event: EvidenceEvent): LogEntry {
   return { time: formatTime(event.at), step: event.stepId, detail: event.detail, state: event.outcome === "error" ? "error" : ["business_outcome", "intervention"].includes(event.outcome) ? "warn" : "ok" };
 }
 function toDiscoveryLog(event: DiscoveryEvidenceEvent): LogEntry {
-  return { time: formatTime(event.at), step: `${String(event.step).padStart(2, "0")} · ${event.phase}`, detail: event.detail, state: event.outcome === "error" ? "error" : event.outcome === "business_outcome" ? "warn" : "ok", provider: event.provider };
+  return { time: formatTime(event.at), step: `${String(event.step).padStart(2, "0")} · ${event.phase}`, detail: event.detail, state: event.outcome === "error" ? "error" : ["business_outcome", "intervention"].includes(event.outcome) ? "warn" : "ok", provider: event.provider };
 }
 function downloadJson(filename: string, value: unknown) {
   const url = URL.createObjectURL(new Blob([JSON.stringify(value, null, 2)], { type: "application/json" }));
@@ -264,6 +378,7 @@ export default function Home() {
   const frameRef = useRef<HTMLIFrameElement>(null);
   const runCounterRef = useRef(0);
   const resumeRef = useRef<ReplayResume | null>(null);
+  const discoveryResumeRef = useRef<DiscoveryResume | null>(null);
   const stopHumanCaptureRef = useRef<(() => void) | null>(null);
   const handoffJobRef = useRef<string | null>(null);
   const handoffInvocationRef = useRef<VerifiedInvocation | null>(null);
@@ -376,11 +491,44 @@ export default function Home() {
 
   async function discover(event: FormEvent) {
     event.preventDefault(); const frame = frameRef.current; if (!frame || busy) return;
+    stopHumanCaptureRef.current?.(); stopHumanCaptureRef.current = null; discoveryResumeRef.current = null; setHandoff(INITIAL_HANDOFF_STATE);
     setDiscoveryStatus("running"); setDiscoveryLogs([]); setDiscoveryResult(null); setGeneratedArtifact(null);
     const result = await runDiscovery({ goal, inputs: { memberId }, origin: window.location.origin, provider: createAdaptiveDiscoveryProvider(), adapter: createDiscoveryAdapter(frame, () => ++runCounterRef.current), onEvidence: (evidence) => setDiscoveryLogs((items) => [...items, toDiscoveryLog(evidence)]) });
     if (result.status === "success") { setGeneratedArtifact(result.artifact); await registerArtifact(result.artifact); }
+    if (result.status === "human_required") {
+      discoveryResumeRef.current = result.resume;
+      setHandoff(transitionHandoff(INITIAL_HANDOFF_STATE, { type: "request", interventionId: result.runId }));
+    }
     setDiscoveryResult(result); setDiscoveryStatus(result.status);
     await persistRun({ runId: result.runId, kind: "discovery", status: result.status, artifactName: result.status === "success" ? result.artifact.name : "get_savings_balance", artifactVersion: result.status === "success" ? result.artifact.version : savedCapability.version, provider: result.provider, summary: { eventCount: result.evidence.length, outcome: result.status }, evidence: result.evidence, artifact: result.status === "success" ? result.artifact : undefined });
+  }
+
+  async function resumeDiscovery() {
+    const frame = frameRef.current; const resume = discoveryResumeRef.current; if (!frame || !resume || handoff.owner !== "human") return;
+    stopHumanCaptureRef.current?.(); stopHumanCaptureRef.current = null;
+    setHandoff((state) => transitionHandoff(state, { type: "resume" })); setDiscoveryStatus("running");
+    const result = await runDiscovery({
+      goal,
+      inputs: { memberId },
+      origin: window.location.origin,
+      provider: createAdaptiveDiscoveryProvider(),
+      adapter: createDiscoveryAdapter(frame, () => ++runCounterRef.current),
+      resume,
+      humanActions: handoff.actions,
+      onEvidence: (evidence) => setDiscoveryLogs((items) => [...items, toDiscoveryLog(evidence)]),
+    });
+    setDiscoveryLogs(result.evidence.map(toDiscoveryLog)); setDiscoveryResult(result); setDiscoveryStatus(result.status);
+    if (result.status === "success") {
+      discoveryResumeRef.current = null; setGeneratedArtifact(result.artifact); await registerArtifact(result.artifact);
+      setHandoff((state) => transitionHandoff(state, { type: "complete" }));
+    } else if (result.status === "human_required") {
+      discoveryResumeRef.current = result.resume;
+      setHandoff(transitionHandoff(INITIAL_HANDOFF_STATE, { type: "request", interventionId: result.runId }));
+    } else {
+      discoveryResumeRef.current = null;
+      setHandoff((state) => transitionHandoff(state, { type: "complete" }));
+    }
+    await persistRun({ runId: result.runId, kind: "discovery", status: result.status, artifactName: result.status === "success" ? result.artifact.name : "get_savings_balance", artifactVersion: result.status === "success" ? result.artifact.version : savedCapability.version, provider: result.provider, summary: { eventCount: result.evidence.length, outcome: result.status, humanActionCount: handoff.actions.length }, evidence: result.evidence, artifact: result.status === "success" ? result.artifact : undefined });
   }
 
   async function replay(event: FormEvent) {
@@ -599,11 +747,11 @@ export default function Home() {
     </nav>
 
     <section className="workspace-grid">
-      <div className="panel target-panel"><div className="panel-heading"><div><span className="panel-number">LIVE</span><h3>Target session</h3></div><a href="/legacy" target="_blank" rel="noreferrer">Open manually ↗</a></div><div className={`ownership-strip ${handoff.owner}`}><span>Control</span><strong>{mode === "handoff" ? handoff.owner.replace("_", " ") : "automation"}</strong><small>Same session retained</small></div><div className="browser-frame"><div className="browser-bar"><span /><span /><span /><div className="address-bar">allowlisted / legacy / member-services</div></div><iframe ref={frameRef} title="Legacy credit union member portal" src="/legacy?embedded=1" /></div></div>
+      <div className="panel target-panel"><div className="panel-heading"><div><span className="panel-number">LIVE</span><h3>Target session</h3></div><a href="/legacy" target="_blank" rel="noreferrer">Open manually ↗</a></div><div className={`ownership-strip ${handoff.owner}`}><span>Control</span><strong>{mode === "handoff" || (mode === "discover" && handoff.owner !== "automation") ? handoff.owner.replace("_", " ") : "automation"}</strong><small>Same session retained</small></div><div className="browser-frame"><div className="browser-bar"><span /><span /><span /><div className="address-bar">allowlisted / legacy / member-services</div></div><iframe ref={frameRef} title="Legacy credit union member portal" src="/legacy?embedded=1" /></div></div>
 
       <aside className="panel run-panel"><div className="panel-heading"><div><span className="panel-number">{mode === "discover" ? "AI" : mode === "replay" ? "DET" : mode === "handoff" ? "HITL" : "API"}</span><h3>{mode === "discover" ? "Goal-driven discovery" : mode === "replay" ? "Deterministic replay" : mode === "handoff" ? "Intervention control" : "Agent capability catalog"}</h3></div><span className={`status-pill ${activeStatus}`}>{String(activeStatus).replace("_", " ")}</span></div>
 
-        {mode === "discover" && <><form onSubmit={discover} className="run-form discovery-form"><label htmlFor="goal">Goal</label><textarea id="goal" value={goal} onChange={(event) => setGoal(event.target.value.slice(0, 500))} required minLength={12} maxLength={500} /><p>Supported intent: read-only member savings balance and account-status lookup.</p><label htmlFor="discovery-member-id">Invocation input</label><div className="input-row"><input id="discovery-member-id" value={memberId} onChange={(event) => setMemberId(event.target.value.replace(/\D/g, "").slice(0, 5))} inputMode="numeric" required pattern="[0-9]{5}" /><button type="submit" disabled={busy || memberId.length !== 5}>{discoveryStatus === "running" ? "Discovering…" : "Discover capability"}</button></div><p>Use <button type="button" className="inline-button" onClick={() => setMemberId("12345")}>12345</button> for success. Sensitive values stay local.</p></form><div className="result-card discovery-result" aria-live="polite"><p className="result-label">Discovery result</p>{!discoveryResult && <p className="empty-result">Submit a goal to start the constrained loop.</p>}{discoveryResult?.status === "success" && <div className="success-result"><strong>{discoveryResult.artifact.name}</strong><span>{discoveryResult.artifact.steps.length} actions · {discoveryResult.provider}</span><div className="result-actions"><button onClick={useGeneratedArtifact}>Replay generated artifact</button><button className="secondary" onClick={() => downloadJson(`${discoveryResult.artifact.name}.json`, discoveryResult.artifact)}>Download JSON</button></div></div>}{discoveryResult?.status === "business_outcome" && <div className="outcome-result"><strong>{discoveryResult.code}</strong><span>{discoveryResult.message}</span></div>}{discoveryResult?.status === "failure" && <div className="failure-result"><strong>{discoveryResult.error.code}</strong><span>Step {discoveryResult.error.step} · {discoveryResult.error.message}</span></div>}</div></>}
+        {mode === "discover" && <><form onSubmit={discover} className="run-form discovery-form"><label htmlFor="goal">Goal</label><textarea id="goal" value={goal} onChange={(event) => setGoal(event.target.value.slice(0, 500))} required minLength={12} maxLength={500} /><p>Supported intent: read-only member savings balance and account-status lookup.</p><label htmlFor="discovery-member-id">Invocation input</label><div className="input-row"><input id="discovery-member-id" value={memberId} onChange={(event) => setMemberId(event.target.value.replace(/\D/g, "").slice(0, 5))} inputMode="numeric" required pattern="[0-9]{5}" /><button type="submit" disabled={busy || ["human_requested", "human", "resuming"].includes(handoff.owner) || memberId.length !== 5}>{discoveryStatus === "running" ? "Discovering…" : "Discover capability"}</button></div><p>Use <button type="button" className="inline-button" onClick={() => setMemberId("12345")}>12345</button> for success or <button type="button" className="inline-button" onClick={() => setMemberId("31415")}>31415</button> to verify discovery handoff. Sensitive values stay local.</p></form><div className="result-card discovery-result" aria-live="polite"><p className="result-label">Discovery result</p>{!discoveryResult && <p className="empty-result">Submit a goal to start the constrained loop.</p>}{discoveryResult?.status === "success" && <div className="success-result"><strong>{discoveryResult.artifact.name}</strong><span>{discoveryResult.artifact.steps.length} actions · {discoveryResult.provider}</span><div className="result-actions"><button onClick={useGeneratedArtifact}>Replay generated artifact</button><button className="secondary" onClick={() => downloadJson(`${discoveryResult.artifact.name}.json`, discoveryResult.artifact)}>Download JSON</button></div></div>}{discoveryResult?.status === "human_required" && handoff.owner === "human_requested" && <div className="intervention-card"><span className="route-badge">Intervention routed</span><h4>{discoveryResult.intervention.code}</h4><p>{discoveryResult.intervention.message}</p><dl><div><dt>Stopped at</dt><dd>Discovery step {discoveryResult.intervention.step}</dd></div><div><dt>Surface state</dt><dd>{discoveryResult.intervention.snapshot.visibleSignals.join(", ")}</dd></div></dl><button onClick={acceptHumanControl}>Accept discovery control</button></div>}{discoveryResult?.status === "human_required" && handoff.owner === "human" && <div className="human-control-card"><span className="route-badge human">Human in control</span><h4>Operate the live session</h4><ol><li>Click <strong>Continue lookup</strong> inside the target session.</li><li>Return here and resume discovery.</li></ol><p>{handoff.actions.length} redacted human action{handoff.actions.length === 1 ? "" : "s"} captured.</p><button onClick={resumeDiscovery} disabled={handoff.actions.length === 0}>Resume discovery</button></div>}{handoff.owner === "resuming" && <div className="handoff-intro"><p className="result-label">Control returned</p><h4>Revalidating discovery…</h4></div>}{discoveryResult?.status === "business_outcome" && <div className="outcome-result"><strong>{discoveryResult.code}</strong><span>{discoveryResult.message}</span></div>}{discoveryResult?.status === "failure" && <div className="failure-result"><strong>{discoveryResult.error.code}</strong><span>Step {discoveryResult.error.step} · {discoveryResult.error.message}</span></div>}</div></>}
 
         {mode === "replay" && <><div className="artifact-source"><span>Artifact source</span><strong>{generatedArtifact ? `Generated or restored · ${artifactReview?.state ?? "draft"}` : "Bundled baseline · approved"}</strong><small>{activeArtifact.name}@{activeArtifact.version}</small></div><form onSubmit={replay} className="run-form"><label htmlFor="replay-member-id">Member ID input</label><div className="input-row"><input id="replay-member-id" value={memberId} onChange={(event) => setMemberId(event.target.value.replace(/\D/g, "").slice(0, 5))} inputMode="numeric" required pattern="[0-9]{5}" /><button type="submit" disabled={busy || memberId.length !== 5 || !artifactApproved}>{runStatus === "running" ? "Running…" : artifactApproved ? "Run capability" : "Approval required"}</button></div><label htmlFor="fault-mode">Fault injection</label><select id="fault-mode" className="policy-select" value={faultMode} onChange={(event) => setFaultMode(event.target.value as FaultMode)}><option value="none">None — normal execution</option><option value="session_expired">Auto-recover — session expired</option><option value="slow_load">Auto-recover — slow load timeout</option><option value="application_error">Stop — hard application error</option></select><p>Try <button type="button" className="inline-button" onClick={() => setMemberId("12345")}>12345</button> or <button type="button" className="inline-button" onClick={() => setMemberId("00000")}>00000</button>. Recovery is capped at one clean deterministic retry.</p></form><ResultCard result={replayResult} />{recoveryStatus && <div className={`recovery-summary ${recoveryStatus.recovered ? "recovered" : "settled"}`}><span>{recoveryStatus.recovered ? "Recovered" : "Policy settled"}</span><strong>{recoveryStatus.attempts} deterministic attempt{recoveryStatus.attempts === 1 ? "" : "s"}</strong><small>{recoveryStatus.recovered ? "The clean retry reached the declared checkpoint." : "No retry was needed or permitted."}</small></div>}</>}
 
