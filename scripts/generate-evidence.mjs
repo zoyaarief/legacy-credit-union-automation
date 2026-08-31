@@ -1,5 +1,5 @@
 import { readFile, writeFile } from "node:fs/promises";
-import { HumanInterventionError, executeCapability } from "../lib/automation/core.ts";
+import { AutomationError, HumanInterventionError, executeCapability } from "../lib/automation/core.ts";
 import { createSimulatedDiscoveryProvider, runDiscovery } from "../lib/discovery/core.ts";
 
 const artifact = JSON.parse(await readFile(new URL("../capabilities/get-savings-balance.v1.json", import.meta.url), "utf8"));
@@ -28,8 +28,8 @@ function discoveryAdapter() {
         ? [
             ...formControls(),
             { ref: "surface-5", role: "region", name: "Member account summary", context: "Lookup result", visible: true, locatorCandidates: [{ kind: "css", value: ".member-result" }, { kind: "css", value: ".legacy-window.member-result" }] },
-            { ref: "surface-6", role: "text", name: "Current Balance cell", context: "Account row: REGULAR SAVINGS", visible: true, hasValue: true, locatorCandidates: [{ kind: "css", value: ".savings-balance" }, { kind: "css", value: ".accounts-grid td:nth-of-type(3)" }] },
-            { ref: "surface-7", role: "text", name: "Status cell", context: "Account row: REGULAR SAVINGS", visible: true, hasValue: true, locatorCandidates: [{ kind: "css", value: ".account-status" }, { kind: "css", value: ".accounts-grid td:nth-of-type(4)" }] },
+            { ref: "surface-6", role: "text", name: "Current Balance cell", context: "Account row: REGULAR SAVINGS", visible: true, hasValue: true, outputBinding: "balance", locatorCandidates: [{ kind: "css", value: ".savings-balance" }, { kind: "css", value: ".accounts-grid td:nth-of-type(3)" }] },
+            { ref: "surface-7", role: "text", name: "Status cell", context: "Account row: REGULAR SAVINGS", visible: true, hasValue: true, outputBinding: "accountStatus", locatorCandidates: [{ kind: "css", value: ".account-status" }, { kind: "css", value: ".accounts-grid td:nth-of-type(4)" }] },
           ]
         : formControls();
       return { url: `${origin}/legacy`, title: "Northstar Core Member Services", controls };
@@ -41,18 +41,32 @@ function discoveryAdapter() {
       if (decision.output === "balance") return { value: "$2,458.17", locator: "css:.savings-balance" };
       return { value: "Active", locator: "css:.account-status" };
     },
+    sessionIdentity: () => `${origin}/legacy?evidence=discovery`,
+    async snapshot() { return { surface: "web", path: "/legacy", title: "Northstar Core Member Services", visibleSignals: [state], sanitizedDom: `Northstar evidence fixture ${state}` }; },
     async verify(target) { return state === "summary" && target.locators.some((item) => item.value === ".member-result"); },
   };
 }
 
-function replayAdapter({ notFound = false, intervention = false } = {}) {
+function replayAdapter({ notFound = false, intervention = false, applicationError = false } = {}) {
   let blocked = intervention;
+  let memberId = "";
   const adapter = {
     async prepare() {},
     currentUrl: () => `${origin}/legacy`,
-    type: async () => "name:member_number",
+    sessionIdentity: () => `${origin}/legacy?evidence=replay`,
+    async snapshot() {
+      return {
+        surface: "web",
+        path: "/legacy",
+        title: "Northstar Core Member Services",
+        visibleSignals: [applicationError ? "application_unavailable" : blocked ? "permission_dialog" : notFound ? "member_not_found" : "member_summary"],
+        sanitizedDom: applicationError ? "SYSTEM 500: CORE MEMBER SERVICES IS UNAVAILABLE." : "Sanitized Northstar runtime fixture.",
+      };
+    },
+    type: async (_target, value) => { memberId = value; return "name:member_number"; },
     click: async () => "button_text:Retrieve Record",
     async waitForOutcome(outcomes) {
+      if (applicationError) throw new AutomationError("application_unavailable", "hard_failure", "CORE MEMBER SERVICES IS UNAVAILABLE");
       if (blocked) {
         throw new HumanInterventionError(
           "operator_acknowledgment_required",
@@ -63,9 +77,10 @@ function replayAdapter({ notFound = false, intervention = false } = {}) {
       return outcomes.find((outcome) => outcome.kind === (notFound ? "business_outcome" : "success"));
     },
     async extract(target) {
-      return target.description.includes("balance")
-        ? { value: "$2,458.17", locator: "css:.accounts-grid tbody tr .savings-balance" }
-        : { value: "Active", locator: "css:.accounts-grid tbody tr .account-status" };
+      const restricted = memberId === "31415";
+      return /balance/i.test(target.description)
+        ? { value: restricted ? "$12,104.62" : "$2,458.17", locator: "css:.accounts-grid tbody tr .savings-balance" }
+        : { value: restricted ? "Restricted" : "Active", locator: "css:.accounts-grid tbody tr .account-status" };
     },
     verify: async () => true,
   };
@@ -86,6 +101,7 @@ function envelope(scenario, result, usedArtifact = artifact) {
 
 const discovery = await runDiscovery({
   goal: "Look up member {{memberId}} and return the current savings balance and account status.",
+  target: "/legacy",
   inputs: { memberId: "12345" },
   origin,
   provider: createSimulatedDiscoveryProvider(),
@@ -93,10 +109,12 @@ const discovery = await runDiscovery({
   runId: "evidence-discovery-success",
   now: clock("2026-08-29T14:00:00.000Z"),
 });
+if (discovery.status !== "success") throw new Error("Discovery evidence did not compile a capability.");
+const generatedArtifact = discovery.artifact;
 
 const replay = replayAdapter();
 const replayResult = await executeCapability({
-  artifact,
+  artifact: generatedArtifact,
   inputs: { memberId: "12345" },
   origin,
   adapter: replay.adapter,
@@ -106,7 +124,7 @@ const replayResult = await executeCapability({
 
 const notFound = replayAdapter({ notFound: true });
 const notFoundResult = await executeCapability({
-  artifact,
+  artifact: generatedArtifact,
   inputs: { memberId: "00000" },
   origin,
   adapter: notFound.adapter,
@@ -116,7 +134,7 @@ const notFoundResult = await executeCapability({
 
 const handoff = replayAdapter({ intervention: true });
 const paused = await executeCapability({
-  artifact,
+  artifact: generatedArtifact,
   inputs: { memberId: "31415" },
   origin,
   adapter: handoff.adapter,
@@ -126,7 +144,7 @@ const paused = await executeCapability({
 if (paused.status !== "human_required") throw new Error("Handoff evidence did not reach human_required.");
 handoff.acknowledge();
 const handoffResult = await executeCapability({
-  artifact,
+  artifact: generatedArtifact,
   inputs: { memberId: "31415" },
   origin,
   adapter: handoff.adapter,
@@ -135,15 +153,26 @@ const handoffResult = await executeCapability({
   now: clock("2026-08-29T14:31:00.000Z"),
 });
 
+const failed = replayAdapter({ applicationError: true });
+const failureResult = await executeCapability({
+  artifact: generatedArtifact,
+  inputs: { memberId: "12345" },
+  origin,
+  adapter: failed.adapter,
+  runId: "evidence-replay-failure",
+  now: clock("2026-08-29T14:40:00.000Z"),
+});
+
 const files = [
-  ["discovery-success.json", envelope("goal-driven savings lookup discovery", discovery, discovery.status === "success" ? discovery.artifact : artifact)],
-  ["replay-success.json", envelope("generated artifact deterministic replay", replayResult)],
-  ["replay-not-found.json", envelope("generated artifact known business outcome", notFoundResult)],
-  ["handoff-success.json", envelope("restricted-account same-session human handoff", handoffResult)],
+  ["discovery-success.json", envelope("simulated-provider live-contract discovery fixture", discovery, generatedArtifact)],
+  ["replay-success.json", envelope("discovered artifact deterministic replay", replayResult, generatedArtifact)],
+  ["replay-not-found.json", envelope("discovered artifact known business outcome", notFoundResult, generatedArtifact)],
+  ["handoff-success.json", envelope("restricted-account same-session human handoff", handoffResult, generatedArtifact)],
+  ["replay-failure.json", envelope("discovered artifact hard application failure with sanitized DOM snapshot", failureResult, generatedArtifact)],
 ];
 
 for (const [name, contents] of files) {
   await writeFile(new URL(`../evidence/${name}`, import.meta.url), `${JSON.stringify(contents, null, 2)}\n`);
 }
 
-console.log(`Generated ${files.length} runtime evidence files for ${artifact.name}@${artifact.version}.`);
+console.log(`Generated ${files.length} runtime evidence files for ${generatedArtifact.name}@${generatedArtifact.version}.`);

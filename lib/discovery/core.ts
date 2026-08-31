@@ -2,13 +2,16 @@ import {
   AutomationError,
   HumanInterventionError,
   isAllowedTargetUrl,
+  validateOutputValue,
   validateCapability,
+  withOperationDeadline,
   type Capability,
   type ControlTarget,
   type HumanAction,
   type Locator,
   type SurfaceSnapshot,
 } from "../automation/core.ts";
+import { signResumeState, verifyResumeState } from "../resume-token.ts";
 
 export type DiscoveryActionName =
   | "type"
@@ -28,6 +31,8 @@ export type ObservedControl = {
   enabled?: boolean;
   filled?: boolean;
   hasValue?: boolean;
+  humanOnly?: boolean;
+  outputBinding?: "balance" | "accountStatus";
   locatorCandidates: Locator[];
 };
 
@@ -56,6 +61,7 @@ export type DiscoveryHistoryEntry = {
   targetName: string | null;
   input: string | null;
   output: string | null;
+  targetKey: string | null;
 };
 
 export type DecisionContext = {
@@ -63,13 +69,13 @@ export type DecisionContext = {
   step: number;
   maxSteps: number;
   inputContract: Record<string, { type: "string"; sensitive: boolean }>;
-  outputContract: Record<string, { type: "currency" | "string" }>;
+  outputContract: Record<string, { type: "currency" | "string"; currency?: string; allowedValues?: string[] }>;
   observation: SurfaceObservation;
   history: DiscoveryHistoryEntry[];
 };
 
 export type ProviderDecision = { provider: string; decision: DiscoveryDecision };
-export type DiscoveryProvider = { decide(context: DecisionContext): Promise<ProviderDecision> };
+export type DiscoveryProvider = { decide(context: DecisionContext, signal: AbortSignal): Promise<ProviderDecision> };
 
 export type DiscoveryAdapterResult = {
   locator?: string;
@@ -77,11 +83,13 @@ export type DiscoveryAdapterResult = {
 };
 
 export type DiscoveryAdapter = {
-  prepare(entryPoint: string): Promise<void>;
+  prepare(entryPoint: string, signal: AbortSignal): Promise<void>;
   currentUrl(): string;
-  observe(): Promise<SurfaceObservation>;
-  execute(decision: DiscoveryDecision, inputs: Record<string, string>): Promise<DiscoveryAdapterResult>;
-  verify(target: ControlTarget): Promise<boolean>;
+  sessionIdentity?(): string;
+  snapshot?(signal: AbortSignal): Promise<SurfaceSnapshot>;
+  observe(signal: AbortSignal): Promise<SurfaceObservation>;
+  execute(decision: DiscoveryDecision, inputs: Record<string, string>, signal: AbortSignal): Promise<DiscoveryAdapterResult>;
+  verify(target: ControlTarget, signal: AbortSignal): Promise<boolean>;
 };
 
 export type DiscoveryEvidenceEvent = {
@@ -103,6 +111,10 @@ export type DiscoveryRecordedAction = {
 };
 
 export type DiscoveryResume = {
+  token: string;
+};
+
+type DiscoveryResumeState = {
   runId: string;
   step: number;
   history: DiscoveryHistoryEntry[];
@@ -110,6 +122,16 @@ export type DiscoveryResume = {
   outputs: Record<string, string>;
   evidence: DiscoveryEvidenceEvent[];
   provider: string;
+  binding: DiscoveryBinding;
+};
+
+export type DiscoveryBinding = {
+  goalFingerprint: string;
+  inputFingerprint: string;
+  targetFingerprint: string;
+  origin: string;
+  sessionIdentity: string;
+  step: number;
 };
 
 export type DiscoveryResult =
@@ -141,7 +163,7 @@ export type DiscoveryResult =
       runId: string;
       status: "failure";
       provider: string;
-      error: { code: string; message: string; step: number; retryable: boolean };
+      error: { code: string; message: string; step: number; retryable: boolean; snapshot?: SurfaceSnapshot };
       evidence: DiscoveryEvidenceEvent[];
     };
 
@@ -196,6 +218,26 @@ function sameLocator(left: Locator, right: Locator) {
   return left.kind === right.kind && left.value === right.value;
 }
 
+async function fingerprint(value: unknown): Promise<string> {
+  const bytes = new TextEncoder().encode(JSON.stringify(value));
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function normalizeDiscoveryTarget(rawTarget: string, origin: string): string {
+  if (typeof rawTarget !== "string" || rawTarget.length === 0 || rawTarget.length > 240) {
+    throw new AutomationError("invalid_target", "invalid_request", "Target must be a permitted application entry point.");
+  }
+  let url: URL;
+  try { url = new URL(rawTarget, origin); } catch {
+    throw new AutomationError("invalid_target", "invalid_request", "Target must be a valid URL or absolute path.");
+  }
+  if (!isAllowedTargetUrl(url.href, origin, DISCOVERY_TARGET_POLICY)) {
+    throw new AutomationError("policy_denied", "policy_denied", "Discovery target is outside the configured application allowlist.");
+  }
+  return `${url.pathname}${url.search}`;
+}
+
 export function validateDiscoveryDecision(decision: unknown, context: DecisionContext): DiscoveryDecision {
   if (typeof decision !== "object" || decision === null) {
     throw new AutomationError("model_contract_invalid", "hard_failure", "The model returned an invalid decision object.");
@@ -227,6 +269,9 @@ export function validateDiscoveryDecision(decision: unknown, context: DecisionCo
     if (["type", "click"].includes(action) && control.enabled === false) {
       throw new AutomationError("target_not_interactable", "hard_failure", "The selected control is visible but disabled.");
     }
+    if (action === "click" && control.humanOnly) {
+      throw new AutomationError("human_only_control", "policy_denied", "Automation cannot activate a human-only control.");
+    }
     const locators = rawLocators.map(parseLocator);
     if (locators.length !== 2 || locators.some((item) => item === null)) {
       throw new AutomationError("model_contract_invalid", "hard_failure", "The model must select two ordered locator candidates for the observed control.");
@@ -249,6 +294,16 @@ export function validateDiscoveryDecision(decision: unknown, context: DecisionCo
   if (action !== "type" && input !== null) throw new AutomationError("model_contract_invalid", "hard_failure", "Only type may reference an input.");
   if (action === "extract" && (!output || !Object.hasOwn(context.outputContract, output))) {
     throw new AutomationError("policy_denied", "policy_denied", "The model referenced an undeclared output.");
+  }
+  if (action === "extract") {
+    const control = context.observation.controls.find((item) => item.ref === controlRef);
+    if (!control || control.outputBinding !== output) {
+      throw new AutomationError("output_target_mismatch", "policy_denied", `The selected control is not semantically bound to ${output}.`);
+    }
+    const selectedKey = target?.locators.map((locator) => `${locator.kind}:${locator.value}`).sort().join("|") ?? "";
+    if (context.history.some((entry) => entry.action === "extract" && entry.targetKey === selectedKey)) {
+      throw new AutomationError("output_target_reused", "policy_denied", "Distinct outputs must be extracted from distinct controls.");
+    }
   }
   if (action !== "extract" && output !== null) throw new AutomationError("model_contract_invalid", "hard_failure", "Only extract may declare an output.");
   if (action === "business_outcome" && businessCode !== "member_not_found") {
@@ -288,7 +343,7 @@ function validateDiscoveryInputs(inputs: Record<string, unknown>): Record<string
 const SUPPORTED_GOAL_PATTERNS = [
   /^(?:please\s+)?(?:look\s*up|find|retrieve|query|check|view|read|get|show)\s+(?:the\s+)?member(?:\s+(?:\{\{memberId\}\}|memberId|\d{5}))?\s+and\s+(?:return|report|read|show|get|display)\s+(?:the\s+)?(?:current\s+)?savings(?:\s+account)?\s+balance\s+and\s+(?:the\s+)?(?:account\s+)?status(?:\s+please)?[.!]?$/i,
   /^(?:please\s+)?(?:get|read|show|display|report|return|retrieve)\s+(?:the\s+)?(?:current\s+)?savings(?:\s+account)?\s+balance\s+and\s+(?:the\s+)?(?:account\s+)?status\s+for\s+(?:the\s+)?member(?:\s+(?:\{\{memberId\}\}|memberId|\d{5}))?(?:\s+please)?[.!]?$/i,
-  /^(?:please\s+)?(?:get|read|show|display|report|return|retrieve)\s+(?:the\s+)?member(?:\s+(?:\{\{memberId\}\}|memberId|\d{5}))?['’]s\s+(?:current\s+)?savings(?:\s+account)?\s+balance\s+and\s+(?:account\s+)?status(?:\s+please)?[.!]?$/i,
+  /^(?:please\s+)?(?:get|read|show|display|report|return|retrieve|check|view|query)\s+(?:the\s+)?member(?:\s+(?:\{\{memberId\}\}|memberId|\d{5}))?['’]s\s+(?:current\s+)?savings(?:\s+account)?\s+balance\s+and\s+(?:account\s+)?status(?:\s+please)?[.!]?$/i,
 ];
 
 export function classifySupportedDiscoveryGoal(goal: string): "get_savings_balance" | null {
@@ -323,6 +378,7 @@ export function compileDiscoveredCapability(options: {
   checkpointTarget: ControlTarget;
   capabilityName: string | null;
   generatedAt: string;
+  targetEntryPoint?: string;
 }): Capability {
   const typeStep = options.trace.find((item) => item.action === "type" && item.input === "memberId" && item.target);
   const clickStep = options.trace.find((item) => item.action === "click" && item.target);
@@ -354,9 +410,9 @@ export function compileDiscoveredCapability(options: {
     name: sanitizeCapabilityName(options.capabilityName),
     version: "1.2.0",
     description: `Discovered from goal: ${redactDiscoveryText(options.goal)}`,
-    target: DISCOVERY_TARGET_POLICY.target,
+    target: { ...DISCOVERY_TARGET_POLICY.target, entryPoint: options.targetEntryPoint ?? DISCOVERY_TARGET_POLICY.target.entryPoint },
     inputs: { memberId: { type: "string" as const, required: true, pattern: "^[0-9]{5}$", sensitive: true } },
-    outputs: { balance: { type: "currency" as const, currency: "USD" }, accountStatus: { type: "string" as const } },
+    outputs: { balance: { type: "currency" as const, currency: "USD" }, accountStatus: { type: "string" as const, allowedValues: ["Active", "Restricted"] } },
     policy: {
       allowedActions: ["type", "click", "wait_for_outcome", "extract"],
       risk: "read_only" as const,
@@ -385,6 +441,7 @@ function interventionSnapshot(observation: SurfaceObservation): SurfaceSnapshot 
 
 export async function runDiscovery(options: {
   goal: string;
+  target: string;
   inputs: Record<string, unknown>;
   origin: string;
   provider: DiscoveryProvider;
@@ -397,14 +454,16 @@ export async function runDiscovery(options: {
   onEvidence?: (event: DiscoveryEvidenceEvent) => void;
 }): Promise<DiscoveryResult> {
   const maxSteps = options.maxSteps ?? DISCOVERY_MAX_STEPS;
-  const runId = options.resume?.runId ?? options.runId ?? crypto.randomUUID();
+  let runId = options.runId ?? crypto.randomUUID();
   const now = options.now ?? (() => new Date().toISOString());
-  const evidence: DiscoveryEvidenceEvent[] = options.resume ? [...options.resume.evidence] : [];
-  const history: DiscoveryHistoryEntry[] = options.resume ? [...options.resume.history] : [];
-  const trace: DiscoveryRecordedAction[] = options.resume ? [...options.resume.trace] : [];
-  const outputs: Record<string, string> = { ...(options.resume?.outputs ?? {}) };
-  let currentStep = options.resume?.step ?? 0;
-  let providerName = options.resume?.provider ?? "unresolved";
+  const evidence: DiscoveryEvidenceEvent[] = [];
+  const history: DiscoveryHistoryEntry[] = [];
+  const trace: DiscoveryRecordedAction[] = [];
+  const outputs: Record<string, string> = {};
+  let currentStep = 0;
+  let providerName = "unresolved";
+  let resumeState: DiscoveryResumeState | null = null;
+  let activeBinding: DiscoveryBinding | null = null;
 
   const record = (event: Omit<DiscoveryEvidenceEvent, "sequence" | "at">) => {
     const complete = { ...event, sequence: evidence.length + 1, at: now() };
@@ -413,41 +472,84 @@ export async function runDiscovery(options: {
   };
 
   try {
+    if (options.resume) {
+      if (typeof options.resume.token !== "string" || !options.resume.token) throw new AutomationError("resume_token_invalid", "policy_denied", "The discovery resume token is missing or malformed.");
+      try {
+        resumeState = await verifyResumeState<DiscoveryResumeState>("discovery", options.resume.token);
+      } catch {
+        throw new AutomationError("resume_token_invalid", "policy_denied", "The discovery resume token failed integrity or expiry validation.");
+      }
+      runId = resumeState.runId;
+      currentStep = resumeState.step;
+      providerName = resumeState.provider;
+      evidence.push(...resumeState.evidence);
+      history.push(...resumeState.history);
+      trace.push(...resumeState.trace);
+      Object.assign(outputs, resumeState.outputs);
+    }
     const safeGoal = validateSupportedDiscoveryGoal(options.goal);
     const inputs = validateDiscoveryInputs(options.inputs);
-    if (!isAllowedTargetUrl(DISCOVERY_TARGET_POLICY.target.entryPoint, options.origin, DISCOVERY_TARGET_POLICY)) {
-      throw new AutomationError("policy_denied", "policy_denied", "Discovery entry point is outside the route allowlist.");
-    }
-    if (!options.resume) {
+    const targetEntryPoint = normalizeDiscoveryTarget(options.target, options.origin);
+    const deadline = Date.now() + DISCOVERY_TIMEOUT_MS;
+    const goalFingerprint = await fingerprint(safeGoal);
+    const inputFingerprint = await fingerprint(inputs);
+    const targetFingerprint = await fingerprint({ ...DISCOVERY_TARGET_POLICY.target, entryPoint: targetEntryPoint });
+    if (!resumeState) {
       record({ phase: "policy", step: 0, outcome: "ok", detail: "Goal, inputs, target route, action set, and read-only risk policy approved." });
-      await options.adapter.prepare(DISCOVERY_TARGET_POLICY.target.entryPoint);
+      await withOperationDeadline((signal) => options.adapter.prepare(targetEntryPoint, signal), Math.max(1, deadline - Date.now()), "discovery_timeout", "Discovery target preparation exceeded its total timeout.");
     } else {
+      const expected = resumeState.binding;
+      const sessionIdentity = options.adapter.sessionIdentity?.() ?? options.adapter.currentUrl();
+      if (
+        !expected
+        || expected.goalFingerprint !== goalFingerprint
+        || expected.inputFingerprint !== inputFingerprint
+        || expected.targetFingerprint !== targetFingerprint
+        || expected.origin !== options.origin
+        || expected.sessionIdentity !== sessionIdentity
+        || expected.step !== resumeState.step
+      ) {
+        throw new AutomationError("resume_context_mismatch", "policy_denied", "The discovery resume token does not match the original goal, inputs, target, session, or step.");
+      }
       for (const action of options.humanActions ?? []) {
         record({ phase: "handoff", step: currentStep, outcome: "ok", detail: `Human ${action.kind} on ${redactDiscoveryText(action.control)}; values were not recorded.`, provider: providerName });
       }
       record({ phase: "resume", step: currentStep, outcome: "ok", detail: "Human returned control; target policy and live-session context revalidated.", provider: providerName });
     }
-    const startedAt = Date.now();
+    activeBinding = {
+      goalFingerprint,
+      inputFingerprint,
+      targetFingerprint,
+      origin: options.origin,
+      sessionIdentity: options.adapter.sessionIdentity?.() ?? options.adapter.currentUrl(),
+      step: currentStep,
+    };
 
-    for (currentStep = options.resume?.step ?? 1; currentStep <= maxSteps; currentStep += 1) {
-      if (Date.now() - startedAt > DISCOVERY_TIMEOUT_MS) {
-        throw new AutomationError("discovery_timeout", "recoverable", "Discovery exceeded its total timeout.", true);
-      }
+    const outputContract: DecisionContext["outputContract"] = { balance: { type: "currency", currency: "USD" }, accountStatus: { type: "string", allowedValues: ["Active", "Restricted"] } };
+    for (const [name, value] of Object.entries(outputs)) {
+      const spec = outputContract[name];
+      if (!spec) throw new AutomationError("resume_context_mismatch", "policy_denied", `Discovery resume token contains undeclared output ${name}.`);
+      outputs[name] = validateOutputValue(name, spec, value);
+    }
+
+    for (currentStep = resumeState?.step ?? 1; currentStep <= maxSteps; currentStep += 1) {
+      if (Date.now() >= deadline) throw new AutomationError("discovery_timeout", "recoverable", "Discovery exceeded its total timeout.", true);
+      activeBinding = { ...activeBinding, step: currentStep };
       if (!isAllowedTargetUrl(options.adapter.currentUrl(), options.origin, DISCOVERY_TARGET_POLICY)) {
         throw new AutomationError("policy_denied", "policy_denied", "Discovery left the target route allowlist.");
       }
-      const observation = await options.adapter.observe();
+      const observation = await withOperationDeadline((signal) => options.adapter.observe(signal), Math.max(1, deadline - Date.now()), "discovery_timeout", "Surface observation exceeded the discovery timeout.");
       record({ phase: "observe", step: currentStep, outcome: "ok", detail: `Observed ${observation.controls.length} sanitized live controls with DOM-derived locator candidates; values remain local.` });
       const context: DecisionContext = {
         goal: safeGoal,
         step: currentStep,
         maxSteps,
         inputContract: { memberId: { type: "string", sensitive: true } },
-        outputContract: { balance: { type: "currency" }, accountStatus: { type: "string" } },
+        outputContract,
         observation,
         history,
       };
-      const providerDecision = await options.provider.decide(context);
+      const providerDecision = await withOperationDeadline((signal) => options.provider.decide(context, signal), Math.max(1, deadline - Date.now()), "discovery_timeout", "The discovery provider exceeded the total timeout.");
       providerName = providerDecision.provider;
       const decision = validateDiscoveryDecision(providerDecision.decision, context);
       record({ phase: "decide", step: currentStep, outcome: "ok", detail: decision.reason, provider: providerName });
@@ -464,7 +566,7 @@ export async function runDiscovery(options: {
         );
       }
       if (decision.action === "complete") {
-        if (!decision.target || !(await options.adapter.verify(decision.target)) || !outputs.balance || !outputs.accountStatus) {
+        if (!decision.target || !(await withOperationDeadline((signal) => options.adapter.verify(decision.target!, signal), Math.max(1, deadline - Date.now()), "discovery_timeout", "Checkpoint verification exceeded the discovery timeout.")) || !outputs.balance || !outputs.accountStatus) {
           throw new AutomationError("goal_not_verified", "hard_failure", "The model declared completion before outputs and checkpoint were verified.");
         }
         const artifact = compileDiscoveredCapability({
@@ -474,18 +576,21 @@ export async function runDiscovery(options: {
           checkpointTarget: decision.target,
           capabilityName: decision.capabilityName,
           generatedAt: now(),
+          targetEntryPoint,
         });
         record({ phase: "compile", step: currentStep, outcome: "ok", detail: `Compiled and validated ${artifact.name}@${artifact.version} from ${trace.length} model-selected live-surface actions.`, provider: providerName });
         record({ phase: "complete", step: currentStep, outcome: "ok", detail: "Goal verified; capability artifact and declared outputs are ready.", provider: providerName });
         return { runId, status: "success", provider: providerName, outputs, artifact, evidence };
       }
 
-      const result = await options.adapter.execute(decision, inputs);
+      const result = await withOperationDeadline((signal) => options.adapter.execute(decision, inputs, signal), Math.max(1, deadline - Date.now()), "discovery_timeout", "A discovery action exceeded the total timeout.");
       const recorded: DiscoveryRecordedAction = { action: decision.action, target: decision.target, controlRef: decision.controlRef, input: decision.input, output: decision.output };
-      history.push({ action: decision.action, controlRef: decision.controlRef, targetName: decision.target?.description ?? null, input: decision.input, output: decision.output });
+      history.push({ action: decision.action, controlRef: decision.controlRef, targetName: decision.target?.description ?? null, input: decision.input, output: decision.output, targetKey: decision.target ? decision.target.locators.map((locator) => `${locator.kind}:${locator.value}`).sort().join("|") : null });
       trace.push(recorded);
 
-      if (decision.action === "extract" && decision.output && result.value) outputs[decision.output] = result.value;
+      if (decision.action === "extract" && decision.output && result.value) {
+        outputs[decision.output] = validateOutputValue(decision.output, context.outputContract[decision.output], result.value);
+      }
       const detail = decision.action === "type"
         ? `Entered redacted ${decision.input} using discovered ${result.locator}.`
         : decision.action === "extract"
@@ -499,14 +604,27 @@ export async function runDiscovery(options: {
   } catch (error) {
     if (error instanceof HumanInterventionError) {
       record({ phase: "handoff", step: currentStep, outcome: "intervention", detail: error.message, provider: providerName });
-      const resume: DiscoveryResume = { runId, step: currentStep, history: [...history], trace: [...trace], outputs: { ...outputs }, evidence: [...evidence], provider: providerName };
+      const resume: DiscoveryResume = { token: await signResumeState<DiscoveryResumeState>("discovery", {
+        runId,
+        step: currentStep,
+        history: [...history],
+        trace: [...trace],
+        outputs: { ...outputs },
+        evidence: [...evidence],
+        provider: providerName,
+        binding: { ...(activeBinding ?? { goalFingerprint: "", inputFingerprint: "", targetFingerprint: "", origin: options.origin, sessionIdentity: options.adapter.currentUrl(), step: currentStep }), step: currentStep },
+      }) };
       return { runId, status: "human_required", provider: providerName, intervention: { code: error.code, message: error.message, step: currentStep, snapshot: error.snapshot }, resume, evidence };
     }
     const automationError = error instanceof AutomationError
       ? error
       : new AutomationError("unexpected_error", "hard_failure", error instanceof Error ? error.message : "Unknown discovery error.");
+    let snapshot: SurfaceSnapshot | undefined;
+    if (options.adapter.snapshot) {
+      try { snapshot = await withOperationDeadline((signal) => options.adapter.snapshot!(signal), 1000, "snapshot_timeout", "Failure snapshot timed out."); } catch { /* Preserve the original failure. */ }
+    }
     record({ phase: "complete", step: currentStep, outcome: "error", detail: automationError.message, provider: providerName });
-    return { runId, status: "failure", provider: providerName, error: { code: automationError.code, message: automationError.message, step: currentStep, retryable: automationError.retryable }, evidence };
+    return { runId, status: "failure", provider: providerName, error: { code: automationError.code, message: automationError.message, step: currentStep, retryable: automationError.retryable, snapshot }, evidence };
   }
 }
 
@@ -548,7 +666,8 @@ function simulatedRawDecision(context: DecisionContext): Record<string, unknown>
 
 export function createSimulatedDiscoveryProvider(): DiscoveryProvider {
   return {
-    async decide(context) {
+    async decide(context, signal) {
+      signal?.throwIfAborted();
       return { provider: "safe-simulator", decision: validateDiscoveryDecision(simulatedRawDecision(context), context) };
     },
   };

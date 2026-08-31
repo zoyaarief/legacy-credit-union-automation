@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1.0",
   "scenario": "restricted-account same-session human handoff",
-  "artifact": "get_savings_balance@1.1.0",
+  "artifact": "get_savings_balance@1.2.0",
   "generatedBy": "scripts/generate-evidence.mjs",
   "sensitiveValuesStored": false,
   "modelTranscriptStored": false,
@@ -9,8 +9,8 @@
     "runId": "evidence-handoff-success",
     "status": "success",
     "outputs": {
-      "balance": "$2,458.17",
-      "accountStatus": "Active"
+      "balance": "$12,104.62",
+      "accountStatus": "Restricted"
     },
     "evidence": [
       {
@@ -22,7 +22,7 @@
         "at": "2026-08-29T14:30:00.000Z"
       },
       {
-        "stepId": "enter_member_id",
+        "stepId": "step_1_type_member_id",
         "action": "type",
         "outcome": "ok",
         "detail": "Entered redacted input memberId using name:member_number.",
@@ -30,15 +30,15 @@
         "at": "2026-08-29T14:30:01.000Z"
       },
       {
-        "stepId": "submit_member_lookup",
+        "stepId": "step_2_submit_lookup",
         "action": "click",
         "outcome": "ok",
-        "detail": "Activated Retrieve Record button using button_text:Retrieve Record.",
+        "detail": "Activated Retrieve Record — Account inquiry form using button_text:Retrieve Record.",
         "sequence": 3,
         "at": "2026-08-29T14:30:02.000Z"
       },
       {
-        "stepId": "wait_for_member_outcome",
+        "stepId": "step_3_wait_for_outcome",
         "action": "handoff",
         "outcome": "intervention",
         "detail": "Automation paused at a restricted-account acknowledgment and routed the live session to an operator.",
@@ -54,7 +54,7 @@
         "at": "2026-08-29T14:31:00.000Z"
       },
       {
-        "stepId": "wait_for_member_outcome",
+        "stepId": "step_3_wait_for_outcome",
         "action": "resume",
         "outcome": "ok",
         "detail": "Human returned control; target policy and live-session context revalidated.",
@@ -62,15 +62,15 @@
         "at": "2026-08-29T14:31:01.000Z"
       },
       {
-        "stepId": "wait_for_member_outcome",
+        "stepId": "step_3_wait_for_outcome",
         "action": "wait_for_outcome",
         "outcome": "ok",
-        "detail": "Observed Member summary panel.",
+        "detail": "Observed Member account summary — Lookup result.",
         "sequence": 7,
         "at": "2026-08-29T14:31:02.000Z"
       },
       {
-        "stepId": "extract_savings_balance",
+        "stepId": "step_4_extract_balance",
         "action": "extract",
         "outcome": "ok",
         "detail": "Extracted declared balance output using css:.accounts-grid tbody tr .savings-balance.",
@@ -78,7 +78,7 @@
         "at": "2026-08-29T14:31:03.000Z"
       },
       {
-        "stepId": "extract_account_status",
+        "stepId": "step_5_extract_accountStatus",
         "action": "extract",
         "outcome": "ok",
         "detail": "Extracted declared accountStatus output using css:.accounts-grid tbody tr .account-status.",

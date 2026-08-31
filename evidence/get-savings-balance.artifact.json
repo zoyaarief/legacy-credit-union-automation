@@ -14,7 +14,7 @@
   },
   "outputs": {
     "balance": { "type": "currency", "currency": "USD" },
-    "accountStatus": { "type": "string" }
+    "accountStatus": { "type": "string", "allowedValues": ["Active", "Restricted"] }
   },
   "policy": {
     "allowedActions": ["type", "click", "wait_for_outcome", "extract"],

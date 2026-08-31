@@ -54,8 +54,8 @@ function discoveryAdapter({ notFound = false, humanRequired = false, variant = "
       const resultControls = state === "summary"
         ? [
             { ref: "result-surface", role: "region", name: "Member account summary", context: "Lookup result", visible: true, locatorCandidates: summaryLocators },
-            { ref: "cell-balance", role: "text", name: "Current Balance cell", context: "Account row: REGULAR SAVINGS", visible: true, hasValue: true, locatorCandidates: balanceLocators },
-            { ref: "cell-status", role: "text", name: "Status cell", context: "Account row: REGULAR SAVINGS", visible: true, hasValue: true, locatorCandidates: statusLocators },
+            { ref: "cell-balance", role: "text", name: "Current Balance cell", context: "Account row: REGULAR SAVINGS", visible: true, hasValue: true, outputBinding: "balance", locatorCandidates: balanceLocators },
+            { ref: "cell-status", role: "text", name: "Status cell", context: "Account row: REGULAR SAVINGS", visible: true, hasValue: true, outputBinding: "accountStatus", locatorCandidates: statusLocators },
           ]
         : state === "notfound"
           ? [{ ref: "status-none", role: "status", name: "Member not found", context: "No member matched", visible: true, locatorCandidates: [locator("css", ".no-result"), locator("css", "[role=status]")] }]
@@ -80,6 +80,7 @@ function discoveryAdapter({ notFound = false, humanRequired = false, variant = "
 
 const fixed = {
   goal: "Look up member {{memberId}} and return the savings balance and account status.",
+  target: "/legacy",
   inputs: { memberId: "12345" },
   origin: "http://localhost:3000",
   runId: "discovery-test",
@@ -147,9 +148,9 @@ test("unsupported or mutating goals fail before the target is prepared", async (
   }
 });
 
-test("supported-goal validation rejects unrelated requests and accepts the exact capability", () => {
+test("supported-goal validation rejects unrelated requests and accepts supported paraphrases", () => {
   assert.throws(() => validateSupportedDiscoveryGoal("Look up the member mailing address."), /supports only a read-only member savings balance/);
-  for (const goal of [fixed.goal, "Retrieve the current savings account balance and account status for member {{memberId}}.", "Show member 12345's savings balance and status."]) assert.doesNotThrow(() => validateSupportedDiscoveryGoal(goal));
+  for (const goal of [fixed.goal, "Retrieve the current savings account balance and account status for member {{memberId}}.", "Show member 12345's savings balance and status.", "Check member {{memberId}}’s current savings balance and account status."]) assert.doesNotThrow(() => validateSupportedDiscoveryGoal(goal));
 });
 
 test("discovery reports not-found as a business outcome without compiling", async () => {
@@ -163,7 +164,7 @@ test("discovery hands a live-surface interruption off and resumes the same run",
   const paused = await runDiscovery({ ...fixed, inputs: { memberId: "31415" }, provider: createSimulatedDiscoveryProvider(), adapter });
   assert.equal(paused.status, "human_required");
   assert.equal(paused.intervention.code, "operator_acknowledgment_required");
-  assert.equal(paused.resume.step, 4);
+  assert.match(paused.resume.token, /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
   assert.equal(adapter.preparations(), 1);
 
   adapter.acknowledge();
@@ -197,6 +198,42 @@ test("model decisions cannot use the wrong role or disabled observed controls", 
   assert.throws(() => validateDiscoveryDecision(rawDecision({ action: "click", controlRef: text.ref, locators: text.locatorCandidates, reason: "Click text." }), contextWith([text])), /not allowed for click/);
 });
 
+test("model decisions cannot activate a human-only operator control", () => {
+  const control = { ref: "operator-continue", role: "button", name: "Continue lookup", context: "Operator dialog action", visible: true, enabled: true, humanOnly: true, locatorCandidates: [locator("button_text", "Continue lookup"), locator("css", "[role=dialog] button")] };
+  assert.throws(() => validateDiscoveryDecision(rawDecision({ action: "click", controlRef: control.ref, locators: control.locatorCandidates, reason: "Continue lookup." }), contextWith([control])), /human-only control/);
+});
+
+test("output decisions require semantic bindings and distinct controls", () => {
+  const wrong = { ref: "last-activity", role: "text", name: "Last Activity cell", context: "Account row: REGULAR SAVINGS", visible: true, hasValue: true, locatorCandidates: [locator("css", ".last-activity"), locator("css", "td:nth-of-type(5)")] };
+  assert.throws(() => validateDiscoveryDecision(rawDecision({ action: "extract", controlRef: wrong.ref, locators: wrong.locatorCandidates, output: "balance", reason: "Extract balance." }), contextWith([wrong])), /not semantically bound/);
+
+  const balance = { ...wrong, ref: "balance", name: "Current Balance cell", outputBinding: "balance", locatorCandidates: [locator("css", ".balance"), locator("css", "td:nth-of-type(3)")] };
+  const reusedHistory = [{ action: "extract", controlRef: balance.ref, targetName: balance.name, input: null, output: "balance", targetKey: balance.locatorCandidates.map((item) => `${item.kind}:${item.value}`).sort().join("|") }];
+  const reusedAsStatus = { ...balance, outputBinding: "accountStatus" };
+  assert.throws(() => validateDiscoveryDecision(rawDecision({ action: "extract", controlRef: reusedAsStatus.ref, locators: reusedAsStatus.locatorCandidates, output: "accountStatus", reason: "Extract status." }), contextWith([reusedAsStatus], reusedHistory)), /distinct controls/);
+});
+
+test("discovery resume is bound to the original goal, inputs, target, and session", async () => {
+  const adapter = discoveryAdapter({ humanRequired: true });
+  const paused = await runDiscovery({ ...fixed, inputs: { memberId: "31415" }, provider: createSimulatedDiscoveryProvider(), adapter });
+  assert.equal(paused.status, "human_required");
+  adapter.acknowledge();
+  const changed = await runDiscovery({ ...fixed, goal: "Show member 12345's savings balance and status.", inputs: { memberId: "12345" }, provider: createSimulatedDiscoveryProvider(), adapter, resume: paused.resume });
+  assert.equal(changed.status, "failure");
+  assert.equal(changed.error.code, "resume_context_mismatch");
+});
+
+test("discovery rejects a client-modified resume token", async () => {
+  const adapter = discoveryAdapter({ humanRequired: true });
+  const paused = await runDiscovery({ ...fixed, inputs: { memberId: "31415" }, provider: createSimulatedDiscoveryProvider(), adapter });
+  assert.equal(paused.status, "human_required");
+  const final = paused.resume.token.at(-1);
+  const forged = { token: `${paused.resume.token.slice(0, -1)}${final === "A" ? "B" : "A"}` };
+  const result = await runDiscovery({ ...fixed, inputs: { memberId: "31415" }, provider: createSimulatedDiscoveryProvider(), adapter, resume: forged });
+  assert.equal(result.status, "failure");
+  assert.equal(result.error.code, "resume_token_invalid");
+});
+
 test("capability compiler rejects an incomplete successful trace", () => {
   const target = { description: "Observed member input", locators: [locator("name", "member"), locator("css", "input.member")] };
   assert.throws(() => compileDiscoveredCapability({ goal: fixed.goal, provider: "test", trace: [{ action: "type", target, controlRef: "opaque", input: "memberId", output: null }], checkpointTarget: target, capabilityName: "get_savings_balance", generatedAt: fixed.now() }), /missing required reusable actions/);
@@ -204,6 +241,8 @@ test("capability compiler rejects an incomplete successful trace", () => {
 
 test("OpenAI provider uses structured outputs, observed candidates, and no storage", async () => {
   let requestBody;
+  let requestSignal;
+  const controller = new AbortController();
   const control = { ref: "opaque-input", role: "textbox", name: "Member Number", context: "Inquiry form", visible: true, enabled: true, locatorCandidates: [locator("name", "member_number"), locator("css", "form input")] };
   const context = contextWith([control]);
   context.goal = redactDiscoveryText("Look up member 12345 and return their savings balance and account status.");
@@ -212,8 +251,10 @@ test("OpenAI provider uses structured outputs, observed candidates, and no stora
     apiKey: "test-key",
     model: "test-model",
     context,
+    signal: controller.signal,
     fetchImpl: async (_url, init) => {
       requestBody = JSON.parse(init.body);
+      requestSignal = init.signal;
       return new Response(JSON.stringify({ output_text: JSON.stringify(responseDecision) }), { status: 200, headers: { "Content-Type": "application/json" } });
     },
   });
@@ -223,6 +264,7 @@ test("OpenAI provider uses structured outputs, observed candidates, and no stora
   assert.equal(JSON.stringify(requestBody.text.format.schema).includes("targetId"), false);
   assert.equal(JSON.stringify(requestBody.text.format.schema).includes("controlRef"), true);
   assert.equal(requestBody.input.includes("12345"), false);
+  assert.equal(requestSignal, controller.signal);
 });
 
 test("adaptive provider falls back only for an explicitly unavailable live provider", async () => {

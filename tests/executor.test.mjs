@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { AutomationError, executeCapability, executeCapabilityWithRecovery, HumanInterventionError } from "../lib/automation/core.ts";
-import { sha256Fingerprint } from "../lib/security/fingerprint.ts";
+import { AutomationError, executeCapability, executeCapabilityWithRecovery, HumanInterventionError, validateCapability } from "../lib/automation/core.ts";
 
 const artifactUrl = new URL("../capabilities/get-savings-balance.v1.json", import.meta.url);
 const artifact = JSON.parse(await readFile(artifactUrl, "utf8"));
@@ -47,7 +46,7 @@ test("executor records the successful locator used for extraction", async () => 
   assert.ok(result.evidence.some((event) => event.action === "extract" && event.detail.includes("css:.verified-output")));
 });
 
-test("risky execution requires a completed fingerprint-bound approval grant", async () => {
+test("risky execution is blocked before the live surface is touched", async () => {
   const riskyArtifact = structuredClone(artifact);
   riskyArtifact.policy.risk = "irreversible";
   riskyArtifact.policy.requiresHumanApproval = true;
@@ -61,42 +60,50 @@ test("risky execution requires a completed fingerprint-bound approval grant", as
   assert.equal(denied.status, "failure");
   assert.equal(denied.error.code, "approval_required");
   assert.equal(prepared, false);
+});
 
-  const insufficient = await executeCapability({
-    artifact: riskyArtifact,
-    inputs: { memberId: "12345" },
-    adapter: adapter(),
-    approvalGrant: { artifactHash: await sha256Fingerprint(riskyArtifact), state: "approved", approvals: 1, requiredApprovals: 1, rejections: 0, approvedAt: fixed.now() },
-    ...fixed,
-  });
-  assert.equal(insufficient.status, "failure");
-  assert.equal(insufficient.error.code, "approval_required");
+test("artifact policy validation fails closed for unknown risk and approval values", () => {
+  const unknownRisk = structuredClone(artifact);
+  unknownRisk.policy.risk = "invented_high_risk";
+  assert.throws(() => validateCapability(unknownRisk), /execution policy is invalid/);
+  const invalidApproval = structuredClone(artifact);
+  invalidApproval.policy.requiresHumanApproval = "no";
+  assert.throws(() => validateCapability(invalidApproval), /execution policy is invalid/);
+});
 
-  const mismatched = await executeCapability({
-    artifact: riskyArtifact,
-    inputs: { memberId: "12345" },
-    adapter: adapter(),
-    approvalGrant: { artifactHash: "wrong", state: "approved", approvals: 2, requiredApprovals: 2, rejections: 0, approvedAt: fixed.now() },
-    ...fixed,
-  });
-  assert.equal(mismatched.status, "failure");
-  assert.equal(mismatched.error.code, "approval_fingerprint_mismatch");
+test("artifact validation rejects malformed input, wait, and business-outcome contracts", () => {
+  for (const invalidInput of [null, { type: "number", required: true }, { type: "string", required: "yes" }, { type: "string", required: true, sensitive: "yes" }, { type: "string", required: true, pattern: "[" }]) {
+    const malformed = structuredClone(artifact);
+    malformed.inputs.memberId = invalidInput;
+    assert.throws(() => validateCapability(malformed), (error) => error.code === "artifact_invalid");
+  }
+  for (const timeoutMs of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+    const malformed = structuredClone(artifact);
+    malformed.steps.find((step) => step.action === "wait_for_outcome").timeoutMs = timeoutMs;
+    assert.throws(() => validateCapability(malformed), (error) => error.code === "artifact_invalid");
+  }
+  for (const invalidOutcome of [null, { code: "member_not_found", message: "Missing" }, { code: "member_not_found", message: "", retryable: false }, { code: 4, message: "Missing", retryable: false }]) {
+    const malformed = structuredClone(artifact);
+    malformed.businessOutcomes = [invalidOutcome];
+    assert.throws(() => validateCapability(malformed), (error) => error.code === "artifact_invalid");
+  }
+});
 
-  const approved = await executeCapability({
-    artifact: riskyArtifact,
-    inputs: { memberId: "12345" },
-    adapter: adapter(),
-    approvalGrant: {
-      artifactHash: await sha256Fingerprint(riskyArtifact),
-      state: "approved",
-      approvals: 2,
-      requiredApprovals: 2,
-      rejections: 0,
-      approvedAt: fixed.now(),
-    },
-    ...fixed,
-  });
-  assert.equal(approved.status, "success");
+test("malformed input definitions fail execution as artifact_invalid", async () => {
+  const malformed = structuredClone(artifact);
+  malformed.inputs.memberId = null;
+  const result = await executeCapability({ artifact: malformed, inputs: { memberId: "12345" }, adapter: adapter(), ...fixed });
+  assert.equal(result.status, "failure");
+  assert.equal(result.error.code, "artifact_invalid");
+});
+
+test("executor enforces declared currency and status output values", async () => {
+  const invalidCurrency = await executeCapability({ artifact, inputs: { memberId: "12345" }, adapter: adapter({ extract: async (target) => target.description.includes("balance") ? "08/21/2026" : "Active" }), ...fixed });
+  assert.equal(invalidCurrency.status, "failure");
+  assert.equal(invalidCurrency.error.code, "output_type_invalid");
+  const invalidStatus = await executeCapability({ artifact, inputs: { memberId: "12345" }, adapter: adapter({ extract: async (target) => target.description.includes("balance") ? "$2,458.17" : "Unknownish" }), ...fixed });
+  assert.equal(invalidStatus.status, "failure");
+  assert.equal(invalidStatus.error.code, "output_value_invalid");
 });
 
 test("executor returns a known business outcome without treating it as a crash", async () => {
@@ -185,6 +192,58 @@ test("executor pauses for a human and resumes the same prepared session", async 
   assert.ok(resumed.evidence.some((event) => event.action === "human_action"));
   assert.ok(resumed.evidence.some((event) => event.action === "resume"));
   assert.equal(JSON.stringify(resumed.evidence).includes("31415"), false);
+});
+
+test("executor rejects a resume with different invocation inputs", async () => {
+  let blocked = true;
+  const liveAdapter = adapter({
+    waitForOutcome: async (outcomes) => {
+      if (blocked) throw new HumanInterventionError("operator_acknowledgment_required", "Operator acknowledgment required.", { surface: "web", path: "/legacy", title: "Northstar", visibleSignals: ["permission_dialog"] });
+      return outcomes.find((outcome) => outcome.kind === "success");
+    },
+  });
+  const paused = await executeCapability({ artifact, inputs: { memberId: "31415" }, adapter: liveAdapter, ...fixed });
+  assert.equal(paused.status, "human_required");
+  blocked = false;
+  const resumed = await executeCapability({ artifact, inputs: { memberId: "12345" }, adapter: liveAdapter, resume: paused.resume, ...fixed });
+  assert.equal(resumed.status, "failure");
+  assert.equal(resumed.error.code, "resume_context_mismatch");
+});
+
+test("executor rejects a client-modified resume token", async () => {
+  const liveAdapter = adapter({
+    waitForOutcome: async () => { throw new HumanInterventionError("operator_acknowledgment_required", "Operator acknowledgment required.", { surface: "web", path: "/legacy", title: "Northstar", visibleSignals: ["permission_dialog"] }); },
+  });
+  const paused = await executeCapability({ artifact, inputs: { memberId: "31415" }, adapter: liveAdapter, ...fixed });
+  assert.equal(paused.status, "human_required");
+  const final = paused.resume.token.at(-1);
+  const forged = { token: `${paused.resume.token.slice(0, -1)}${final === "A" ? "B" : "A"}` };
+  const resumed = await executeCapability({ artifact, inputs: { memberId: "31415" }, adapter: liveAdapter, resume: forged, ...fixed });
+  assert.equal(resumed.status, "failure");
+  assert.equal(resumed.error.code, "resume_token_invalid");
+});
+
+test("declared run timeout aborts the underlying adapter call", async () => {
+  const short = structuredClone(artifact);
+  short.policy.runTimeoutMs = 20;
+  let aborted = false;
+  let mutated = false;
+  const result = await executeCapability({
+    artifact: short,
+    inputs: { memberId: "12345" },
+    adapter: adapter({
+      type: async (_target, _value, signal) => new Promise((resolve, reject) => {
+        const timer = setTimeout(() => { mutated = true; resolve("late mutation"); }, 80);
+        signal.addEventListener("abort", () => { clearTimeout(timer); aborted = true; reject(signal.reason); }, { once: true });
+      }),
+    }),
+    ...fixed,
+  });
+  assert.equal(result.status, "failure");
+  assert.equal(result.error.code, "run_timeout");
+  await new Promise((resolve) => setTimeout(resolve, 90));
+  assert.equal(aborted, true);
+  assert.equal(mutated, false);
 });
 
 for (const fault of [

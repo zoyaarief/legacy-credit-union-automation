@@ -7,7 +7,6 @@ export default defineConfig({
   reporter: "line",
   use: {
     baseURL: "http://127.0.0.1:3000",
-    channel: "chrome",
     headless: true,
     trace: "retain-on-failure",
   },
@@ -16,5 +15,9 @@ export default defineConfig({
     url: "http://127.0.0.1:3000",
     reuseExistingServer: true,
     timeout: 120_000,
+    env: {
+      DISCOVERY_FORCE_SIMULATOR: "1",
+      OPENAI_API_KEY: "",
+    },
   },
 });

@@ -1,6 +1,6 @@
 import type { HumanAction } from "../automation/core.ts";
 
-export type Ownership = "automation" | "human_requested" | "human" | "resuming" | "completed";
+export type Ownership = "automation" | "human_requested" | "human" | "resuming" | "completed" | "failed";
 
 export type HandoffState = {
   owner: Ownership;
@@ -14,6 +14,7 @@ export type HandoffEvent =
   | { type: "record"; action: HumanAction }
   | { type: "resume" }
   | { type: "complete" }
+  | { type: "fail" }
   | { type: "reset" };
 
 export const INITIAL_HANDOFF_STATE: HandoffState = {
@@ -22,9 +23,13 @@ export const INITIAL_HANDOFF_STATE: HandoffState = {
   actions: [],
 };
 
+export function terminalResumeEvent(status: "success" | "business_outcome" | "failure"): Extract<HandoffEvent, { type: "complete" | "fail" }> {
+  return status === "failure" ? { type: "fail" } : { type: "complete" };
+}
+
 export function transitionHandoff(state: HandoffState, event: HandoffEvent): HandoffState {
   if (event.type === "reset") return INITIAL_HANDOFF_STATE;
-  if (event.type === "request" && state.owner === "automation") {
+  if (event.type === "request" && ["automation", "resuming"].includes(state.owner)) {
     return { owner: "human_requested", interventionId: event.interventionId, actions: [] };
   }
   if (event.type === "accept" && state.owner === "human_requested") {
@@ -38,6 +43,9 @@ export function transitionHandoff(state: HandoffState, event: HandoffEvent): Han
   }
   if (event.type === "complete" && ["automation", "resuming"].includes(state.owner)) {
     return { ...state, owner: "completed" };
+  }
+  if (event.type === "fail" && state.owner === "resuming") {
+    return { ...state, owner: "failed" };
   }
   throw new Error(`Invalid handoff transition: ${state.owner} -> ${event.type}`);
 }

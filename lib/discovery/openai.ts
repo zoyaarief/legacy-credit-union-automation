@@ -56,6 +56,7 @@ export async function decideWithOpenAI(options: {
   model: string;
   context: DecisionContext;
   fetchImpl?: typeof fetch;
+  signal?: AbortSignal;
 }): Promise<DiscoveryDecision> {
   const fetchImpl = options.fetchImpl ?? fetch;
   const response = await fetchImpl("https://api.openai.com/v1/responses", {
@@ -87,6 +88,7 @@ export async function decideWithOpenAI(options: {
         },
       },
     }),
+    signal: options.signal,
   });
 
   if (!response.ok) {

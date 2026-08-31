@@ -14,15 +14,16 @@ const requiredReportHeadings = [
   "Cuts",
 ];
 
-for (const file of ["README.md", "REPORT.md", "evidence/get-savings-balance.artifact.json", "evidence/discovery-success.json", "evidence/replay-success.json", "evidence/replay-not-found.json", "evidence/handoff-success.json"]) {
+for (const file of ["README.md", "REPORT.md", "evidence/get-savings-balance.artifact.json", "evidence/discovery-success.json", "evidence/replay-success.json", "evidence/replay-not-found.json", "evidence/handoff-success.json", "evidence/replay-failure.json", "evidence/browser-generated-artifact.png"]) {
   assert.ok(fs.existsSync(path.join(root, file)), `Missing required submission file: ${file}`);
 }
+assert.ok(fs.statSync(path.join(root, "evidence/browser-generated-artifact.png")).size > 10_000, "Real-browser evidence screenshot is unexpectedly small.");
 
 const report = read("REPORT.md");
 const reportHeadings = [...report.matchAll(/^## (.+)$/gm)].map((match) => match[1]);
 assert.deepEqual(reportHeadings, requiredReportHeadings, "REPORT.md must use the required headings in order.");
 const reportWords = report.trim().split(/\s+/).length;
-assert.ok(reportWords >= 700 && reportWords <= 1800, `REPORT.md should stay near 1–3 pages; found ${reportWords} words.`);
+assert.ok(reportWords >= 700 && reportWords <= 1300, `REPORT.md should stay focused at roughly 1–3 pages; found ${reportWords} words.`);
 
 const readme = read("README.md");
 for (const heading of ["Run locally", "Demo path", "Verify", "Project map", "Submission"]) assert.match(readme, new RegExp(`^## ${heading}$`, "m"));
@@ -36,9 +37,11 @@ assert.equal(artifact.name, "get_savings_balance");
 assert.ok(Array.isArray(artifact.steps) && artifact.steps.length > 0);
 assert.ok(artifact.inputs?.memberId && artifact.outputs?.balance && artifact.checkpoint);
 
-for (const file of ["discovery-success.json", "replay-success.json", "replay-not-found.json", "handoff-success.json"]) {
+const discoveryCapture = JSON.parse(read("evidence/discovery-success.json"));
+const discoveredArtifactId = `${discoveryCapture.result.artifact.name}@${discoveryCapture.result.artifact.version}`;
+for (const file of ["discovery-success.json", "replay-success.json", "replay-not-found.json", "handoff-success.json", "replay-failure.json"]) {
   const capture = JSON.parse(read(`evidence/${file}`));
-  if (file !== "discovery-success.json") assert.equal(capture.artifact, `${runtimeArtifact.name}@${runtimeArtifact.version}`, `${file} must identify the reviewed runtime artifact.`);
+  assert.equal(capture.artifact, discoveredArtifactId, `${file} must identify the exact discovered artifact.`);
   assert.ok(Array.isArray(capture.result?.evidence) && capture.result.evidence.length > 0, `${file} must include the exact runtime evidence array.`);
   assert.deepEqual(capture.result.evidence.map((event) => event.sequence), capture.result.evidence.map((_, index) => index + 1), `${file} evidence must remain ordered.`);
   assert.ok(capture.result.evidence.every((event) => Number.isFinite(Date.parse(event.at)) && typeof event.detail === "string"), `${file} evidence must include timestamps and details.`);
@@ -47,17 +50,44 @@ for (const file of ["discovery-success.json", "replay-success.json", "replay-not
   assert.equal(JSON.stringify(capture).includes("31415"), false, `${file} must not store the restricted member id.`);
 }
 
-const discoveryCapture = JSON.parse(read("evidence/discovery-success.json"));
 assert.equal(discoveryCapture.artifact, `${discoveryCapture.result.artifact.name}@${discoveryCapture.result.artifact.version}`, "Discovery evidence must identify the artifact it actually compiled.");
 assert.equal(discoveryCapture.result.artifact.version, "1.2.0", "Discovery evidence must use the live-surface artifact revision.");
 assert.ok(discoveryCapture.result.artifact.steps.every((step) => step.action === "wait_for_outcome" || step.target?.locators?.length === 2), "Discovered actions must retain two model-selected observed locator candidates.");
 assert.ok(discoveryCapture.result.evidence.some((event) => event.phase === "decide" && event.provider), "Discovery evidence must include provider decisions.");
 const replayCapture = JSON.parse(read("evidence/replay-success.json"));
+assert.equal(replayCapture.result.status, "success");
 assert.ok(replayCapture.result.evidence.some((event) => event.action === "extract" && event.detail.includes(" using ")), "Replay evidence must record successful extraction locators.");
+const handoffCapture = JSON.parse(read("evidence/handoff-success.json"));
+assert.deepEqual(handoffCapture.result.outputs, { balance: "$12,104.62", accountStatus: "Restricted" }, "Restricted handoff evidence must report the live scenario outputs.");
+const failureCapture = JSON.parse(read("evidence/replay-failure.json"));
+assert.equal(failureCapture.result.status, "failure");
+assert.ok(failureCapture.result.error.snapshot?.sanitizedDom, "Failure evidence must include a sanitized DOM snapshot.");
 
 const envExample = read(".env.example");
-for (const secret of ["OPENAI_API_KEY", "EVIDENCE_ENCRYPTION_KEY", "INVOCATION_SIGNING_KEY", "SCHEDULER_SECRET", "ALERT_WEBHOOK_SECRET"]) {
+for (const secret of ["OPENAI_API_KEY"]) {
   assert.match(envExample, new RegExp(`^${secret}=$`, "m"), `${secret} must remain blank in .env.example.`);
+}
+
+for (const removedPath of [
+  "app/chatgpt-auth.ts",
+  "app/api/artifacts/route.ts",
+  "app/api/capabilities/route.ts",
+  "app/api/jobs/route.ts",
+  "app/api/operations/route.ts",
+  "app/api/roles/route.ts",
+  "app/api/runs/route.ts",
+  "app/api/scheduler/route.ts",
+  "db/index.ts",
+  "db/schema.ts",
+  "drizzle.config.ts",
+  "lib/alerts/delivery.ts",
+  "lib/auth/roles.ts",
+  "lib/jobs/core.ts",
+  "lib/operations/core.ts",
+  "lib/persistence/contracts.ts",
+  "lib/security/invocation.ts",
+]) {
+  assert.equal(fs.existsSync(path.join(root, removedPath)), false, `Optional infrastructure must stay out of the focused submission: ${removedPath}`);
 }
 
 console.log(`Submission audit passed: ${reportWords} report words, ${reportHeadings.length} required sections, complete evidence set.`);

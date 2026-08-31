@@ -1,16 +1,29 @@
 {
   "schemaVersion": "1.0",
-  "scenario": "discovered artifact known business outcome",
+  "scenario": "discovered artifact hard application failure with sanitized DOM snapshot",
   "artifact": "get_savings_balance@1.2.0",
   "generatedBy": "scripts/generate-evidence.mjs",
   "sensitiveValuesStored": false,
   "modelTranscriptStored": false,
   "result": {
-    "runId": "evidence-replay-not-found",
-    "status": "business_outcome",
-    "code": "member_not_found",
-    "message": "No member matched the supplied identifier.",
-    "retryable": false,
+    "runId": "evidence-replay-failure",
+    "status": "failure",
+    "error": {
+      "category": "hard_failure",
+      "code": "application_unavailable",
+      "stepId": "step_3_wait_for_outcome",
+      "message": "CORE MEMBER SERVICES IS UNAVAILABLE",
+      "retryable": false,
+      "snapshot": {
+        "surface": "web",
+        "path": "/legacy",
+        "title": "Northstar Core Member Services",
+        "visibleSignals": [
+          "application_unavailable"
+        ],
+        "sanitizedDom": "SYSTEM 500: CORE MEMBER SERVICES IS UNAVAILABLE."
+      }
+    },
     "evidence": [
       {
         "stepId": "policy",
@@ -18,7 +31,7 @@
         "outcome": "ok",
         "detail": "Artifact, inputs, action allowlist, risk policy, and target path approved.",
         "sequence": 1,
-        "at": "2026-08-29T14:20:00.000Z"
+        "at": "2026-08-29T14:40:00.000Z"
       },
       {
         "stepId": "step_1_type_member_id",
@@ -26,7 +39,7 @@
         "outcome": "ok",
         "detail": "Entered redacted input memberId using name:member_number.",
         "sequence": 2,
-        "at": "2026-08-29T14:20:01.000Z"
+        "at": "2026-08-29T14:40:01.000Z"
       },
       {
         "stepId": "step_2_submit_lookup",
@@ -34,15 +47,15 @@
         "outcome": "ok",
         "detail": "Activated Retrieve Record — Account inquiry form using button_text:Retrieve Record.",
         "sequence": 3,
-        "at": "2026-08-29T14:20:02.000Z"
+        "at": "2026-08-29T14:40:02.000Z"
       },
       {
         "stepId": "step_3_wait_for_outcome",
-        "action": "wait_for_outcome",
-        "outcome": "business_outcome",
-        "detail": "Detected declared member_not_found outcome.",
+        "action": "policy_check",
+        "outcome": "error",
+        "detail": "CORE MEMBER SERVICES IS UNAVAILABLE",
         "sequence": 4,
-        "at": "2026-08-29T14:20:03.000Z"
+        "at": "2026-08-29T14:40:03.000Z"
       }
     ]
   }

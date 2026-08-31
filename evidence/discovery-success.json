@@ -1,6 +1,6 @@
 {
   "schemaVersion": "1.0",
-  "scenario": "goal-driven savings lookup discovery",
+  "scenario": "simulated-provider live-contract discovery fixture",
   "artifact": "get_savings_balance@1.2.0",
   "generatedBy": "scripts/generate-evidence.mjs",
   "sensitiveValuesStored": false,
@@ -43,7 +43,11 @@
           "currency": "USD"
         },
         "accountStatus": {
-          "type": "string"
+          "type": "string",
+          "allowedValues": [
+            "Active",
+            "Restricted"
+          ]
         }
       },
       "policy": {
