@@ -48,20 +48,23 @@ session to a person, and resumes where it stopped.
 ## How it works
 
 ```mermaid
-flowchart LR
-    subgraph Discover["1 · Discover (model in the loop)"]
-        O["Observe visible controls<br/>+ locator candidates"] --> D["Provider decides one action<br/>(OpenAI or simulator)"]
-        D --> V["Validate against the<br/>current observation"]
-        V --> X["Act on the live surface"]
-        X --> O
+flowchart TD
+    subgraph Discover["1 · Discover: model in the loop"]
+        direction LR
+        O["Observe visible<br/>controls"] --> D["Provider picks<br/>one action"]
+        D --> V["Validate against<br/>the observation"]
+        V --> X["Act on the<br/>live surface"]
+        X -->|"next step"| O
     end
-    X -->|"successful trace"| C["Compile + validate<br/>typed JSON capability"]
-    C --> R
-    subgraph Replay["2 · Replay (no model)"]
-        R["Ordered steps · locator fallbacks<br/>policy + checkpoint"] --> OUT["balance · accountStatus<br/>+ evidence"]
+    Discover -->|"successful trace"| C["Compile and validate a typed JSON capability"]
+    C --> Replay
+    subgraph Replay["2 · Replay: no model"]
+        direction LR
+        R["Ordered steps +<br/>locator fallbacks"] --> P["Policy +<br/>checkpoint"]
+        P --> OUT["balance · status<br/>+ evidence"]
     end
-    R -.->|"operator dialog"| H["3 · Human handoff<br/>signed resume token"]
-    H -.->|"resume same session"| R
+    Replay -.->|"operator-only dialog"| H["3 · Human handoff with a signed resume token"]
+    H -.->|"resume in the same session"| Replay
 ```
 
 A compiled capability declares its target and allowlist, typed inputs and outputs, risk
